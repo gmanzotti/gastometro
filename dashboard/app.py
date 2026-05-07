@@ -36,7 +36,7 @@ def _fmt(valor: float, decimais: int = 2) -> str:
 
 # -- Configuracao da pagina ------------------------------------------------
 st.set_page_config(
-    page_title="Radar Fiscal FIESP",
+    page_title="Gastômetro FIESP",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -648,7 +648,7 @@ def aba_explorador_rtn(dados, filtros, col_val, is_pib, opcao_sel):
 # -- App principal ---------------------------------------------------------
 
 def main():
-    st.title("📊 Radar Fiscal FIESP")
+    st.title("📊 Gastômetro FIESP")
     st.caption(
         "Monitoramento de resultados fiscais do Governo Federal  ·  "
         "Secretaria do Tesouro Nacional"
