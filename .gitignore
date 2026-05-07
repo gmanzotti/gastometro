@@ -1,0 +1,30 @@
+# Segredos
+.env
+
+# Dados brutos e intermediários (pesados, não precisam ir pro GitHub)
+data/despesas/raw/
+data/despesas/silver/
+data/cartao_corporativo/
+data/emendas/
+
+# Ferramentas locais
+.vscode/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários e de diagnóstico
+diagnostico_api_resultado.txt

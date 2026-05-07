@@ -1,0 +1,17 @@
+# ── Core ──────────────────────────────────────────────────────────
+pandas>=2.1.0
+pyarrow>=14.0.0          # Parquet engine (snappy compression)
+numpy>=1.26.0
+
+# ── HTTP / API ─────────────────────────────────────────────────────
+requests>=2.31.0
+
+# ── Dashboard ─────────────────────────────────────────────────────
+streamlit>=1.32.0
+plotly>=5.18.0
+
+# ── Utilitários ───────────────────────────────────────────────────
+python-dotenv>=1.0.0     # Carrega TRANSPARENCIA_API_KEY do arquivo .env
+
+# ── Desenvolvimento / Testes ───────────────────────────────────────
+pytest>=7.4.0
