@@ -7,13 +7,15 @@ Lê todos os Parquet silver e produz tabelas gold otimizadas para o dashboard:
   gold/despesas_mensal_natureza.parquet   — gasto mensal por natureza de despesa
   gold/despesas_vigilancia.parquet        — rubricas/órgãos de alta vigilância
   gold/anomalias.parquet                  — registros com z-score acima do threshold
+  gold/previsao_mensal_orgao.parquet      — previsão de gastos por órgão (12 meses à frente)
+  gold/previsao_mensal_natureza.parquet   — previsão de gastos por natureza (12 meses à frente)
 
 Regras de negócio desta camada:
   - Agregação mensal (empenho → gasto total)
   - Cálculo de variação percentual mês/mês e ano/ano
   - Cálculo de z-score para detecção de anomalia
   - Acumulado no ano (YTD)
-  - Percentual do orçamento consumido (requer dados SIOP — stub por ora)
+  - Previsão mensal por ratio rolling (variação acumulada em 12 meses)
 
 Uso:
   python pipelines/despesas/gold.py
@@ -277,6 +279,208 @@ def gerar_anomalias(df_orgao: pd.DataFrame, df_natureza: pd.DataFrame) -> pd.Dat
     return anomalias
 
 
+def calcular_previsao_mensal(
+    df_mensal: pd.DataFrame,
+    coluna_grupo: str,
+    coluna_nome: str,
+    horizonte_meses: int = 12,
+    min_meses_janela: int = 6,
+) -> pd.DataFrame:
+    """
+    Gera previsões mensais para os próximos horizonte_meses usando:
+
+        previsão_t = pago_{t-12} × ratio_rolling
+
+    onde:
+        ratio_rolling = Σpago(últimos 12 meses) / Σpago(12 meses anteriores)
+
+    O ratio captura a tendência recente de crescimento (equivalente à variação
+    acumulada em 12 meses — métrica padrão do BCB e IBGE). Elimina sazonalidade
+    ao comparar janelas anuais completas e responde a acelerações recentes.
+
+    Para o horizonte multi-mês: o ratio é ancorado na última data conhecida e
+    aplicado a cada mês futuro. Isso evita contaminar o ratio com valores ainda
+    desconhecidos — cada mês futuro usa o mesmo momentum observado até agora.
+
+    O intervalo de confiança é empírico: aplicamos a fórmula retroativamente a
+    meses históricos e calculamos o quão errada ela seria. Os percentis p25/p75
+    dos erros relativos (actual/previsão) viram os limites inferior e superior.
+
+    Parâmetros:
+        df_mensal       : DataFrame gold com colunas ano, mes, valor_pago
+        coluna_grupo    : 'codigo_orgao' ou 'codigo_natureza_despesa'
+        coluna_nome     : 'nome_orgao' ou 'nome_natureza_despesa'
+        horizonte_meses : quantos meses à frente prever (padrão: 12)
+        min_meses_janela: mínimo de meses com dados em cada janela de 12 (padrão: 6)
+    """
+    resultados = []
+
+    for grupo_id, g in df_mensal.groupby(coluna_grupo):
+        g = g.sort_values(["ano", "mes"]).copy()
+
+        # Cria Series indexada por Timestamp (primeiro dia do mês) para lookups fáceis
+        g["data"] = pd.to_datetime({"year": g["ano"], "month": g["mes"], "day": 1})
+        serie = g.drop_duplicates("data").set_index("data")["valor_pago"]
+
+        nome       = g[coluna_nome].iloc[-1]
+        ultima_data = serie.index.max()
+
+        # ── Helper: soma um bloco de N meses a partir de data_inicio ──────────
+        def _soma_bloco(data_inicio: pd.Timestamp, n: int) -> tuple[float, int]:
+            """Retorna (soma, n_meses_com_dados). Meses ausentes valem 0."""
+            datas    = pd.date_range(data_inicio, periods=n, freq="MS")
+            valores  = [serie.get(d, 0.0) for d in datas]
+            presentes = sum(1 for d in datas if d in serie.index)
+            return float(np.sum(valores)), presentes
+
+        # ── Ratio ancorado na última data conhecida ────────────────────────────
+        # Para previsões multi-mês usamos o mesmo ratio (calculado com os dados
+        # mais recentes disponíveis) para todos os meses futuros. Isso evita
+        # usar meses ainda desconhecidos na janela rolling.
+        ini_recente  = ultima_data - pd.DateOffset(months=11)   # t-11 … t (12 meses)
+        ini_anterior = ultima_data - pd.DateOffset(months=23)   # t-23 … t-12 (12 meses)
+
+        soma_rec, n_rec = _soma_bloco(ini_recente,  12)
+        soma_ant, n_ant = _soma_bloco(ini_anterior, 12)
+
+        # Rejeita se alguma soma for negativa (estornos/reversões que corrompem o ratio)
+        # ou se não houver meses suficientes com dados em cada janela
+        if (soma_ant <= 0 or soma_rec <= 0
+                or n_rec < min_meses_janela or n_ant < min_meses_janela):
+            log.debug("Grupo %s: ratio inválido (somas: rec=%.0f ant=%.0f) — pulando.",
+                      grupo_id, soma_rec, soma_ant)
+            continue
+
+        ratio_fixo = soma_rec / soma_ant
+
+        # Ratio fora de banda [0.3, 5.0] indica situação atípica (ex: órgão criado/extinto,
+        # mudança estrutural de dotação). Previsão seria enganosa — melhor omitir.
+        if not (0.3 <= ratio_fixo <= 5.0):
+            log.debug("Grupo %s: ratio fora de banda (%.4f) — pulando.", grupo_id, ratio_fixo)
+            continue
+
+        # ── Intervalo de confiança: backtest histórico ─────────────────────────
+        # Para cada mês passado onde temos dados suficientes, calculamos o que
+        # a fórmula teria previsto e dividimos pelo valor real.
+        # A distribuição desses erros relativos vira a banda de incerteza.
+        erros_relativos = []
+        for data_t in serie.index:
+            # Precisa de 24 meses de histórico antes de data_t
+            if data_t < serie.index.min() + pd.DateOffset(months=24):
+                continue
+
+            data_base = data_t - pd.DateOffset(years=1)
+            if data_base not in serie.index:
+                continue
+
+            ini_r = data_t - pd.DateOffset(months=11)
+            ini_a = data_t - pd.DateOffset(months=23)
+            s_rec, n_r = _soma_bloco(ini_r, 12)
+            s_ant, n_a = _soma_bloco(ini_a, 12)
+
+            if s_ant == 0 or n_r < min_meses_janela or n_a < min_meses_janela:
+                continue
+
+            ratio_hist = s_rec / s_ant
+            pred_hist  = serie[data_base] * ratio_hist
+
+            if pred_hist > 0:
+                erros_relativos.append(serie[data_t] / pred_hist)
+
+        if len(erros_relativos) < 3:
+            # Sem backtest suficiente: usa banda simétrica de ±15% como fallback
+            ic_baixo_fator = 0.85
+            ic_alto_fator  = 1.15
+        else:
+            ic_baixo_fator = float(np.percentile(erros_relativos, 25))
+            ic_alto_fator  = float(np.percentile(erros_relativos, 75))
+
+        # ── Geração das previsões ──────────────────────────────────────────────
+        for h in range(1, horizonte_meses + 1):
+            data_t    = ultima_data + pd.DateOffset(months=h)
+            data_base = data_t - pd.DateOffset(years=1)
+
+            if data_base not in serie.index:
+                continue  # sem valor do mesmo mês no ano passado → não prevê
+
+            pago_base = float(serie[data_base])
+
+            # Rejeita base negativa (estorno no mês de referência tornaria a
+            # previsão invertida — sem interpretação fiscal útil)
+            if pago_base <= 0:
+                continue
+
+            previsao  = pago_base * ratio_fixo
+
+            resultados.append({
+                coluna_grupo:  grupo_id,
+                coluna_nome:   nome,
+                "ano":         data_t.year,
+                "mes":         data_t.month,
+                "previsao_pago":     round(previsao, 2),
+                "previsao_ic_baixo": round(previsao * ic_baixo_fator, 2),
+                "previsao_ic_alto":  round(previsao * ic_alto_fator,  2),
+                "ratio_rolling":     round(ratio_fixo, 4),
+                "pago_base":         round(pago_base, 2),
+                "n_meses_historico": len(serie),
+            })
+
+    if not resultados:
+        log.warning("calcular_previsao_mensal: nenhum resultado gerado para %s.", coluna_grupo)
+        return pd.DataFrame()
+
+    return pd.DataFrame(resultados)
+
+
+def gerar_previsoes(df_orgao: pd.DataFrame, df_natureza: pd.DataFrame) -> None:
+    """Calcula e salva previsões para órgão e natureza de despesa.
+
+    Só considera grupos com dados recentes (últimos 6 meses do dataset global),
+    garantindo que as previsões sejam genuinamente futuras e não históricas.
+    """
+    log.info("Gerando gold: previsões mensais...")
+
+    # Data máxima global do dataset — previsões só fazem sentido após esse ponto
+    ano_max = int(df_orgao["ano"].max())
+    mes_max = int(df_orgao[df_orgao["ano"] == ano_max]["mes"].max())
+    data_max_global = pd.Timestamp(year=ano_max, month=mes_max, day=1)
+    corte_recencia = data_max_global - pd.DateOffset(months=6)
+
+    def _filtrar_recentes(df: pd.DataFrame, coluna_grupo: str) -> pd.DataFrame:
+        """Mantém apenas grupos com pelo menos um registro nos últimos 6 meses."""
+        df["_data"] = pd.to_datetime({"year": df["ano"], "month": df["mes"], "day": 1})
+        grupos_recentes = (
+            df[df["_data"] >= corte_recencia][coluna_grupo].unique()
+        )
+        return df[df[coluna_grupo].isin(grupos_recentes)].drop(columns="_data")
+
+    df_orgao_rec    = _filtrar_recentes(df_orgao,    "codigo_orgao")
+    df_natureza_rec = _filtrar_recentes(df_natureza, "codigo_natureza_despesa")
+
+    prev_orgao = calcular_previsao_mensal(df_orgao_rec, "codigo_orgao", "nome_orgao")
+    if not prev_orgao.empty:
+        # Garante que o output contém apenas meses futuros (após data_max_global)
+        prev_orgao = prev_orgao[
+            pd.to_datetime({"year": prev_orgao["ano"], "month": prev_orgao["mes"], "day": 1})
+            > data_max_global
+        ]
+        saida = GOLD_DIR / "previsao_mensal_orgao.parquet"
+        prev_orgao.to_parquet(saida, index=False)
+        log.info("Salvo: %s (%d previsões)", saida.name, len(prev_orgao))
+
+    prev_nat = calcular_previsao_mensal(
+        df_natureza_rec, "codigo_natureza_despesa", "nome_natureza_despesa"
+    )
+    if not prev_nat.empty:
+        prev_nat = prev_nat[
+            pd.to_datetime({"year": prev_nat["ano"], "month": prev_nat["mes"], "day": 1})
+            > data_max_global
+        ]
+        saida = GOLD_DIR / "previsao_mensal_natureza.parquet"
+        prev_nat.to_parquet(saida, index=False)
+        log.info("Salvo: %s (%d previsões)", saida.name, len(prev_nat))
+
+
 def main():
     df_silver = _carregar_silver_completo()
 
@@ -284,6 +488,7 @@ def main():
     df_natureza = gerar_mensal_natureza(df_silver)
     _             = gerar_vigilancia(df_silver)
     _             = gerar_anomalias(df_orgao, df_natureza)
+    gerar_previsoes(df_orgao, df_natureza)
 
     log.info("Gold completo. Tabelas disponíveis em: %s", GOLD_DIR)
 

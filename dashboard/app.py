@@ -69,11 +69,13 @@ st.markdown("""
 def carregar_dados():
     dados = {}
     arquivos = {
-        "orgao":      GOLD_DIR / "despesas_mensal_orgao.parquet",
-        "natureza":   GOLD_DIR / "despesas_mensal_natureza.parquet",
-        "vigilancia": GOLD_DIR / "despesas_vigilancia.parquet",
-        "anomalias":  GOLD_DIR / "anomalias.parquet",
-        "rtn":        DATA_DIR / "rtn" / "rtn_mensal.parquet",
+        "orgao":             GOLD_DIR / "despesas_mensal_orgao.parquet",
+        "natureza":          GOLD_DIR / "despesas_mensal_natureza.parquet",
+        "vigilancia":        GOLD_DIR / "despesas_vigilancia.parquet",
+        "anomalias":         GOLD_DIR / "anomalias.parquet",
+        "rtn":               DATA_DIR / "rtn" / "rtn_mensal.parquet",
+        "previsao_orgao":    GOLD_DIR / "previsao_mensal_orgao.parquet",
+        "previsao_natureza": GOLD_DIR / "previsao_mensal_natureza.parquet",
     }
     for nome, caminho in arquivos.items():
         dados[nome] = pd.read_parquet(caminho) if caminho.exists() else pd.DataFrame()
@@ -645,6 +647,217 @@ def aba_explorador_rtn(dados, filtros, col_val, is_pib, opcao_sel):
     )
 
 
+# -- Aba 5: Previsão de Gastos (Despesas) ----------------------------------
+
+def aba_previsao(dados):
+    df_orgao    = dados.get("orgao",    pd.DataFrame())
+    df_natureza = dados.get("natureza", pd.DataFrame())
+    df_prev_org = dados.get("previsao_orgao",    pd.DataFrame())
+    df_prev_nat = dados.get("previsao_natureza", pd.DataFrame())
+
+    if df_prev_org.empty and df_prev_nat.empty:
+        st.info(
+            "Dados de previsão não encontrados. "
+            "Execute `python pipelines/despesas/gold.py` para gerá-los."
+        )
+        return
+
+    granularidade = st.radio(
+        "Visualizar por", ["Órgão", "Natureza de despesa"], horizontal=True
+    )
+
+    if granularidade == "Órgão":
+        df_hist = df_orgao
+        df_prev = df_prev_org
+        col_grupo = "codigo_orgao"
+        col_nome  = "nome_orgao"
+        label_sel = "Selecionar órgão"
+    else:
+        df_hist = df_natureza
+        df_prev = df_prev_nat
+        col_grupo = "codigo_natureza_despesa"
+        col_nome  = "nome_natureza_despesa"
+        label_sel = "Selecionar natureza de despesa"
+
+    if df_prev.empty:
+        st.info(f"Sem previsões disponíveis para a granularidade selecionada.")
+        return
+
+    # Monta dropdown só com grupos que têm previsão calculada
+    grupos_com_prev = df_prev[col_grupo].unique()
+    opcoes = (
+        df_hist[df_hist[col_grupo].isin(grupos_com_prev)]
+        .drop_duplicates(col_grupo)[[col_grupo, col_nome]]
+        .sort_values(col_nome)
+    )
+    labels_map = {row[col_grupo]: row[col_nome] for _, row in opcoes.iterrows()}
+
+    grupo_sel = st.selectbox(
+        label_sel,
+        list(labels_map.keys()),
+        format_func=lambda k: labels_map.get(k, k),
+    )
+    if grupo_sel is None:
+        return
+
+    # Dados históricos e de previsão para o grupo selecionado
+    hist = (
+        df_hist[df_hist[col_grupo] == grupo_sel]
+        .sort_values(["ano", "mes"])
+        .copy()
+    )
+    hist["data"] = pd.to_datetime(
+        hist["ano"].astype(str) + "-" + hist["mes"].astype(str).str.zfill(2) + "-01"
+    )
+
+    prev = (
+        df_prev[df_prev[col_grupo] == grupo_sel]
+        .sort_values(["ano", "mes"])
+        .copy()
+    )
+    prev["data"] = pd.to_datetime(
+        prev["ano"].astype(str) + "-" + prev["mes"].astype(str).str.zfill(2) + "-01"
+    )
+
+    if prev.empty:
+        st.warning("Sem previsão disponível para o item selecionado.")
+        return
+
+    ultima_data = hist["data"].max()
+
+    # Limita o histórico aos últimos 36 meses para não poluir o gráfico
+    corte = ultima_data - pd.DateOffset(months=35)
+    hist_plot = hist[hist["data"] >= corte].copy()
+
+    # Escala: decide entre R$ milhões e R$ bilhões conforme magnitude
+    max_val = max(
+        hist_plot["valor_pago"].abs().max(),
+        prev["previsao_ic_alto"].abs().max(),
+    )
+    if max_val >= 1e9:
+        escala, unidade = 1e9, "R$ bilhões"
+    else:
+        escala, unidade = 1e6, "R$ milhões"
+
+    # ── Gráfico ──────────────────────────────────────────────────────────
+    fig = go.Figure()
+
+    # Banda de confiança (IC p25-p75)
+    x_band = pd.concat([prev["data"], prev["data"][::-1]])
+    y_band = pd.concat([
+        prev["previsao_ic_alto"] / escala,
+        prev["previsao_ic_baixo"][::-1] / escala,
+    ])
+    fig.add_trace(go.Scatter(
+        x=x_band, y=y_band,
+        fill="toself",
+        fillcolor="rgba(230, 126, 34, 0.15)",
+        line=dict(color="rgba(0,0,0,0)"),
+        name="Intervalo de confiança (p25–p75)",
+        hoverinfo="skip",
+    ))
+
+    # Linha histórica
+    fig.add_trace(go.Scatter(
+        x=hist_plot["data"],
+        y=hist_plot["valor_pago"] / escala,
+        mode="lines+markers",
+        line=dict(color="#2E86C1", width=2),
+        marker=dict(size=4),
+        name="Pago (histórico)",
+        hovertemplate="%{x|%m/%Y}: %{y:.2f}<extra></extra>",
+    ))
+
+    # Linha de previsão — começa no último ponto histórico para continuar a curva
+    ultimo_hist = hist_plot.iloc[-1]
+    x_prev = [ultimo_hist["data"]] + prev["data"].tolist()
+    y_prev = [ultimo_hist["valor_pago"] / escala] + (prev["previsao_pago"] / escala).tolist()
+    fig.add_trace(go.Scatter(
+        x=x_prev, y=y_prev,
+        mode="lines+markers",
+        line=dict(color="#E67E22", width=2, dash="dash"),
+        marker=dict(size=6, symbol="diamond"),
+        name="Previsão",
+        hovertemplate="%{x|%m/%Y}: %{y:.2f}<extra></extra>",
+    ))
+
+    # Linha vertical marcando fim dos dados reais
+    fig.add_vline(
+        x=ultima_data.timestamp() * 1000,
+        line_dash="dot", line_color="#888", opacity=0.6,
+        annotation_text="último dado real",
+        annotation_position="top right",
+        annotation_font_size=11,
+    )
+
+    fig.update_layout(
+        height=460,
+        font=dict(size=13),
+        yaxis_title=unidade,
+        legend=dict(
+            orientation="h", yanchor="top", y=-0.22,
+            xanchor="center", x=0.5, title="",
+        ),
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(
+            tickformat="%m/%Y",
+            tickfont=dict(size=12),
+            rangeslider=dict(visible=True, thickness=0.06),
+            rangeselector=dict(buttons=[
+                dict(count=1,  label="1a",  step="year", stepmode="backward"),
+                dict(count=2,  label="2a",  step="year", stepmode="backward"),
+                dict(step="all", label="Max"),
+            ]),
+        ),
+        yaxis=dict(tickfont=dict(size=12)),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Métricas de contexto ─────────────────────────────────────────────
+    ratio    = float(prev["ratio_rolling"].iloc[0])
+    n_hist   = int(prev["n_meses_historico"].iloc[0])
+    variacao = (ratio - 1) * 100
+    sinal    = "+" if variacao >= 0 else ""
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric(
+        "Tendência (12m vs 12m anteriores)",
+        f"{sinal}{_fmt(variacao, 1)}%",
+        help="Variação percentual da soma dos últimos 12 meses sobre os 12 meses anteriores.",
+    )
+    c2.metric("Meses de histórico", str(n_hist))
+    c3.metric(
+        "Previsão total (próx. 12m)",
+        f"R$ {_fmt(prev['previsao_pago'].sum() / escala, 1)} {'bi' if escala == 1e9 else 'mi'}",
+    )
+
+    # ── Tabela de previsões ──────────────────────────────────────────────
+    st.markdown("**Previsões mensais detalhadas**")
+    tbl = prev[["ano", "mes", "previsao_pago", "previsao_ic_baixo", "previsao_ic_alto"]].copy()
+    sufixo = "bi" if escala == 1e9 else "mi"
+    tbl["Período"]     = tbl["mes"].map(MES_LABELS) + "/" + tbl["ano"].astype(str)
+    tbl["Previsão"]    = tbl["previsao_pago"].apply(
+        lambda v: f"R$ {_fmt(v / escala, 1)} {sufixo}"
+    )
+    tbl["IC Baixo (p25)"] = tbl["previsao_ic_baixo"].apply(
+        lambda v: f"R$ {_fmt(v / escala, 1)} {sufixo}"
+    )
+    tbl["IC Alto (p75)"]  = tbl["previsao_ic_alto"].apply(
+        lambda v: f"R$ {_fmt(v / escala, 1)} {sufixo}"
+    )
+    st.dataframe(
+        tbl[["Período", "Previsão", "IC Baixo (p25)", "IC Alto (p75)"]],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.caption(
+        "Metodologia: previsão_t = pago_{t-12} × ratio_rolling | "
+        "ratio = Σpago(últimos 12m) / Σpago(12m anteriores) | "
+        "IC calculado por backtest histórico da fórmula."
+    )
+
+
 # -- App principal ---------------------------------------------------------
 
 def main():
@@ -687,11 +900,12 @@ def main():
     col_val = OPCOES[opcao_sel]
     is_pib  = col_val == "pct_pib"
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Resultado Fiscal",
         "🚨 Alertas",
         "🔎 Vigilancia Fiscal",
         "📋 Explorador",
+        "🔮 Previsão de Gastos",
     ])
 
     with tab1:
@@ -702,6 +916,8 @@ def main():
         aba_vigilancia_rtn(dados, filtros, col_val, is_pib)
     with tab4:
         aba_explorador_rtn(dados, filtros, col_val, is_pib, opcao_sel)
+    with tab5:
+        aba_previsao(dados)
 
     st.markdown("---")
     st.caption(
