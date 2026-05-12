@@ -8,8 +8,11 @@ Executar:
   streamlit run dashboard/app.py
 """
 
+import base64
+import calendar
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -21,17 +24,95 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.settings import DATA_DIR, ORGAOS_ALTA_VIGILANCIA, RUBRICAS_ALTA_VIGILANCIA
 
-GOLD_DIR = DATA_DIR / "despesas" / "gold"
+GOLD_DIR  = DATA_DIR / "despesas" / "gold"
+LOGO_PATH = Path(__file__).parent / "assets" / "fiesp-logo.jpg"
+
+
+def _logo_existe() -> bool:
+    return LOGO_PATH.exists()
+
+
+def _logo_b64() -> str:
+    """Retorna data URI base64 do logo FIESP, ou string vazia se não encontrado."""
+    if not LOGO_PATH.exists():
+        return ""
+    data = LOGO_PATH.read_bytes()
+    return "data:image/jpeg;base64," + base64.b64encode(data).decode()
 
 MES_LABELS = {
     1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
     7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
 }
 
+# Paleta de cores
+C = {
+    "bg":         "#050B18",
+    "bg2":        "#0D1B2E",
+    "bg3":        "#0F2644",
+    "border":     "#1E3A5F",
+    "primary":    "#1E6FD9",
+    "accent":     "#38BDF8",
+    "text":       "#E2E8F0",
+    "text_dim":   "#94A3B8",
+    "text_muted": "#64748B",
+    "positive":   "#22C55E",
+    "negative":   "#EF4444",
+    "warning":    "#F59E0B",
+    "receita":    "#22C55E",
+    "despesa":    "#EF4444",
+    "resultado":  "#38BDF8",
+    "nominal":    "#A78BFA",
+}
+
+# Constantes de estilo Plotly reutilizaveis
+_RSEL = dict(
+    bgcolor=C["bg3"],
+    bordercolor=C["border"],
+    borderwidth=1,
+    font=dict(color=C["text_dim"], size=11),
+    activecolor=C["primary"],
+)
+_RSLD = dict(bgcolor=C["bg2"], bordercolor=C["border"], thickness=0.06)
+
 
 def _fmt(valor: float, decimais: int = 2) -> str:
     s = f"{valor:,.{decimais}f}"
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _plotly_dark(fig, height=420, margin=None):
+    """Aplica tema escuro padrao a qualquer figura Plotly."""
+    if margin is None:
+        margin = dict(l=10, r=10, t=30, b=10)
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(13,27,46,0.4)",
+        font=dict(family="Inter, sans-serif", color=C["text_dim"], size=12),
+        height=height,
+        margin=margin,
+        title_font=dict(color=C["text"], size=14),
+        legend=dict(
+            bgcolor="rgba(13,27,46,0.9)",
+            bordercolor=C["border"],
+            borderwidth=1,
+            font=dict(color=C["text"], size=12),
+        ),
+    )
+    fig.update_xaxes(
+        gridcolor=C["border"],
+        zerolinecolor=C["border"],
+        tickfont=dict(color=C["text_dim"], size=11),
+        title_font=dict(color=C["text_dim"], size=12),
+        showline=False,
+    )
+    fig.update_yaxes(
+        gridcolor=C["border"],
+        zerolinecolor=C["border"],
+        tickfont=dict(color=C["text_dim"], size=11),
+        title_font=dict(color=C["text_dim"], size=12),
+        showline=False,
+    )
+    return fig
 
 
 # -- Configuracao da pagina ------------------------------------------------
@@ -42,23 +123,161 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+st.markdown(f"""
 <style>
-  .alerta-vermelho {
-    background-color: #FDECEA; border-left: 4px solid #C0392B;
-    padding: 12px 16px; border-radius: 4px; margin-bottom: 8px;
-  }
-  .alerta-amarelo {
-    background-color: #FEF9E7; border-left: 4px solid #F39C12;
-    padding: 12px 16px; border-radius: 4px; margin-bottom: 8px;
-  }
-  .fonte-tag {
-    font-size: 11px; color: #888;
-    background: #EEF; border-radius: 4px; padding: 2px 6px;
-  }
-  .kpi-sub {
-    font-size: 15px; font-weight: 700; color: #222; margin-bottom: 4px;
-  }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+html {{
+    zoom: 90%;
+}}
+
+html, body, .stApp {{
+    font-family: 'Inter', sans-serif !important;
+    background-color: {C['bg']} !important;
+}}
+
+/* Barra superior da Streamlit */
+[data-testid="stHeader"] {{
+    background-color: {C['bg']} !important;
+    border-bottom: 1px solid {C['border']};
+    position: relative;
+}}
+[data-testid="stDecoration"] {{ display: none; }}
+[data-testid="stToolbar"] {{ right: 2rem; }}
+
+/* Sidebar */
+[data-testid="stSidebar"] {{
+    background-color: {C['bg2']} !important;
+    border-right: 1px solid {C['border']};
+}}
+[data-testid="stSidebarUserContent"] {{ padding-top: 0 !important; }}
+
+/* Conteudo principal */
+.main .block-container {{
+    padding-top: 4px !important;
+    max-width: 1600px;
+}}
+
+/* Abas */
+.stTabs [data-baseweb="tab-list"] {{
+    background-color: {C['bg2']};
+    border-radius: 10px;
+    padding: 4px;
+    gap: 2px;
+    border: 1px solid {C['border']};
+    margin-bottom: 16px;
+}}
+.stTabs [data-baseweb="tab"] {{
+    border-radius: 7px;
+    color: {C['text_dim']} !important;
+    font-weight: 500;
+    font-size: 13px;
+    padding: 8px 18px;
+    background: transparent;
+    border: none !important;
+    transition: background 0.15s;
+}}
+.stTabs [aria-selected="true"] {{
+    background-color: {C['primary']} !important;
+    color: #fff !important;
+    font-weight: 600;
+}}
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {{ display: none !important; }}
+
+/* Metric cards */
+[data-testid="metric-container"] {{
+    background-color: {C['bg2']} !important;
+    border: 1px solid {C['border']} !important;
+    border-radius: 10px !important;
+    padding: 16px 20px !important;
+    transition: border-color 0.2s;
+}}
+[data-testid="metric-container"]:hover {{
+    border-color: {C['primary']} !important;
+}}
+[data-testid="stMetricLabel"] > div,
+[data-testid="stMetricLabel"] label {{
+    color: {C['text_dim']} !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}}
+[data-testid="stMetricValue"] > div {{
+    color: {C['text']} !important;
+    font-size: 22px !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.3px;
+}}
+
+/* Textos */
+h1, h2, h3, h4 {{ color: {C['text']} !important; }}
+p {{ color: {C['text_dim']}; }}
+.stMarkdown p {{ color: {C['text_dim']} !important; }}
+.stCaption p, caption {{ color: {C['text_muted']} !important; font-size: 11px !important; }}
+[data-testid="stMarkdownContainer"] strong {{ color: {C['text']} !important; }}
+
+/* Dividers */
+hr {{ border-color: {C['border']} !important; opacity: 0.5; }}
+
+/* Alertas */
+.alerta-vermelho {{
+    background: linear-gradient(90deg, rgba(239,68,68,0.08) 0%, rgba(13,27,46,0.5) 100%);
+    border-left: 3px solid {C['negative']};
+    padding: 12px 16px; border-radius: 6px; margin-bottom: 8px;
+    color: {C['text']} !important;
+}}
+.alerta-amarelo {{
+    background: linear-gradient(90deg, rgba(245,158,11,0.08) 0%, rgba(13,27,46,0.5) 100%);
+    border-left: 3px solid {C['warning']};
+    padding: 12px 16px; border-radius: 6px; margin-bottom: 8px;
+    color: {C['text']} !important;
+}}
+.alerta-vermelho *, .alerta-amarelo * {{ color: {C['text']} !important; }}
+
+/* Sub-header de secao KPI */
+.kpi-sub {{
+    font-size: 11px; font-weight: 600; color: {C['accent']};
+    text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px;
+}}
+
+/* Tag de fonte */
+.fonte-tag {{
+    font-size: 10px; color: {C['text_muted']};
+    background: rgba(30,58,95,0.4); border: 1px solid {C['border']};
+    border-radius: 4px; padding: 2px 8px;
+}}
+
+/* DataFrames */
+[data-testid="stDataFrame"] {{
+    border: 1px solid {C['border']} !important;
+    border-radius: 8px;
+    overflow: hidden;
+}}
+
+/* Scrollbar */
+::-webkit-scrollbar {{ width: 5px; height: 5px; }}
+::-webkit-scrollbar-track {{ background: {C['bg']}; }}
+::-webkit-scrollbar-thumb {{ background: {C['border']}; border-radius: 3px; }}
+::-webkit-scrollbar-thumb:hover {{ background: {C['primary']}; }}
+
+/* Download button */
+[data-testid="stDownloadButton"] button {{
+    background-color: {C['bg3']} !important;
+    border: 1px solid {C['border']} !important;
+    color: {C['accent']} !important;
+    font-weight: 500; border-radius: 6px; font-size: 12px;
+}}
+[data-testid="stDownloadButton"] button:hover {{
+    border-color: {C['accent']} !important;
+}}
+
+/* Separador de secao */
+.section-divider {{
+    height: 1px; background: linear-gradient(90deg, {C['border']} 0%, transparent 100%);
+    margin: 16px 0;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,36 +298,67 @@ def carregar_dados():
     }
     for nome, caminho in arquivos.items():
         dados[nome] = pd.read_parquet(caminho) if caminho.exists() else pd.DataFrame()
+
+    cont_path = DATA_DIR / "contador_fiscal.json"
+    dados["contador"] = (
+        json.loads(cont_path.read_text(encoding="utf-8")) if cont_path.exists() else {}
+    )
     return dados
 
 
 # -- Sidebar ---------------------------------------------------------------
 
 def sidebar_filtros(df_rtn: pd.DataFrame) -> dict:
-    st.sidebar.title("🔍 Filtros")
+    if _logo_existe():
+        st.sidebar.image(str(LOGO_PATH), width=140)
+    st.sidebar.markdown(f"""
+    <div style="padding:4px 4px 20px 4px; border-bottom:1px solid {C['border']}; margin-bottom:20px;">
+      <div style="font-size:9px; letter-spacing:2.5px; color:{C['accent']}; font-weight:700;
+                  text-transform:uppercase; margin-bottom:6px;">
+        ASSESSORIA ECONÔMICA · FIESP
+      </div>
+      <div style="font-size:18px; font-weight:700; color:{C['text']}; letter-spacing:-0.3px;">
+        Gastômetro
+      </div>
+    </div>
+    <div style="font-size:9px; letter-spacing:2px; color:{C['text_muted']}; font-weight:700;
+                text-transform:uppercase; margin-bottom:14px;">
+      Parâmetros
+    </div>
+    """, unsafe_allow_html=True)
 
     if df_rtn.empty:
         return {}
 
     anos = sorted(df_rtn["ano"].unique(), reverse=True)
-    ano_sel = st.sidebar.selectbox("Ano de referencia", anos)
+    ano_sel = st.sidebar.selectbox("Ano de referência", anos)
 
     meses = sorted(df_rtn[df_rtn["ano"] == ano_sel]["mes"].unique(), reverse=True)
     mes_sel = st.sidebar.selectbox(
-        "Mes de referencia", meses,
+        "Mês de referência", meses,
         format_func=lambda m: MES_LABELS.get(m, m),
     )
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Alertas**")
+    st.sidebar.markdown(f"""
+    <div style="height:1px; background:{C['border']}; margin:20px 0 16px 0;"></div>
+    <div style="font-size:9px; letter-spacing:2px; color:{C['text_muted']}; font-weight:700;
+                text-transform:uppercase; margin-bottom:12px;">
+      Alertas
+    </div>
+    """, unsafe_allow_html=True)
+
     mostrar_amarelo  = st.sidebar.checkbox("Mostrar alertas amarelos",  value=True)
     mostrar_vermelho = st.sidebar.checkbox("Mostrar alertas vermelhos", value=True)
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown(
-        "<span class='fonte-tag'>Dados: Tesouro Nacional (RTN)</span>",
-        unsafe_allow_html=True,
-    )
+    st.sidebar.markdown(f"""
+    <div style="height:1px; background:{C['border']}; margin:20px 0 16px 0;"></div>
+    <div style="font-size:10px; color:{C['text_muted']}; line-height:1.6;">
+      <span style="color:{C['accent']}; font-weight:600;">Fonte:</span><br>
+      Tesouro Nacional · RTN<br>
+      <span style="font-size:9px; opacity:0.7;">Secretaria do Tesouro Nacional</span>
+    </div>
+    """, unsafe_allow_html=True)
+
     return {
         "ano": ano_sel,
         "mes": mes_sel,
@@ -175,29 +425,453 @@ def _fmt_rtn(v, is_pib: bool):
 # -- Constantes de negocio -------------------------------------------------
 
 KPIS_RTN = [
-    ("3. ",  "Receita Liquida",    "Receita Total menos Transferencias por Reparticao."),
-    ("4. ",  "Despesa Total",      "Previdencia + Pessoal + Obrigatorias + Discricionarias."),
-    ("5. ",  "Result. Primario",   "Receita Liquida - Despesa Total. Negativo = deficit."),
-    ("10.", "Result. Nominal",    "Resultado Primario + Juros Nominais. Negativo = deficit."),
+    ("3. ",  "Receita Líquida",    "Receita Total menos Transferências por Repartição."),
+    ("4. ",  "Despesa Total",      "Previdência + Pessoal + Obrigatórias + Discricionárias."),
+    ("5. ",  "Result. Primário",   "Receita Líquida - Despesa Total. Negativo = déficit."),
+    ("10.", "Result. Nominal",    "Resultado Primário + Juros Nominais. Negativo = déficit."),
 ]
 
 COMP_DESPESA = [
-    ("4.1 ",  "Benef. Previdenciarios"),
+    ("4.1 ",  "Benef. Previdenciários"),
     ("4.2 ",  "Pessoal e Encargos"),
-    ("4.3 ",  "Outras Obrigatorias"),
-    ("4.4.2", "Discricionarias"),
+    ("4.3 ",  "Outras Obrigatórias"),
+    ("4.4.2", "Discricionárias"),
 ]
 
 SERIES_ALERTA = [
-    ("3. ",   "Receita Liquida"),
+    ("3. ",   "Receita Líquida"),
     ("4. ",   "Despesa Total"),
-    ("4.1 ",  "Benef. Previdenciarios"),
+    ("4.1 ",  "Benef. Previdenciários"),
     ("4.2 ",  "Pessoal e Encargos"),
-    ("4.3 ",  "Outras Obrigatorias"),
-    ("4.4.2", "Discricionarias"),
-    ("5. ",   "Result. Primario"),
+    ("4.3 ",  "Outras Obrigatórias"),
+    ("4.4.2", "Discricionárias"),
+    ("5. ",   "Result. Primário"),
     ("10.",   "Result. Nominal"),
 ]
+
+
+# -- Helpers reutilizáveis para composição de despesas ---------------------
+
+def _card_metrica_grande(label: str, valor: str, delta: str | None = None):
+    """Cartão HTML de métrica grande, centralizado e com destaque visual."""
+    if delta:
+        cor = C["negative"] if delta.startswith("+") else C["positive"]
+        delta_html = (
+            f'<div style="font-size:15px; color:{cor}; margin-top:8px; font-weight:500;">'
+            f'{delta}</div>'
+        )
+    else:
+        delta_html = ""
+    st.markdown(f"""
+<div style="
+    background: linear-gradient(135deg, {C['bg2']} 0%, {C['bg3']} 60%);
+    border: 1px solid {C['border']};
+    border-radius: 12px;
+    padding: 24px 32px;
+    text-align: center;
+    margin-bottom: 12px;
+">
+    <div style="font-size:10px; text-transform:uppercase; letter-spacing:2px;
+                color:{C['text_muted']}; margin-bottom:8px;">
+        {label}
+    </div>
+    <div style="font-size:48px; font-weight:700; color:{C['text']};
+                letter-spacing:-1px; line-height:1.15;">
+        {valor}
+    </div>
+    {delta_html}
+</div>
+""", unsafe_allow_html=True)
+
+
+def _render_comp_rtn(fn_valor, is_pib, titulo, height=240):
+    """Gráfico de barras horizontais com composição 2 dígitos (categorias RTN)."""
+    items = [{"Categoria": n, "Valor": fn_valor(p)} for p, n in COMP_DESPESA]
+    items = [i for i in items if i["Valor"] is not None and pd.notna(i["Valor"])]
+    if not items:
+        st.info("Sem dados de composição.")
+        return
+    df_c = pd.DataFrame(items).sort_values("Valor", ascending=True)
+    if is_pib:
+        x_vals  = df_c["Valor"]
+        x_title = "% do PIB"
+        texts   = df_c["Valor"].apply(lambda v: f"{_fmt(v, 1)}%")
+    else:
+        x_vals  = df_c["Valor"] / 1e3
+        x_title = "R$ bilhões"
+        texts   = df_c["Valor"].apply(lambda v: f"R$ {_fmt(v / 1e3, 1)} bi")
+    fig = go.Figure(go.Bar(
+        x=x_vals, y=df_c["Categoria"], orientation="h",
+        marker_color=C["despesa"],
+        marker_line_width=0,
+        text=texts, textposition="outside",
+        textfont=dict(size=12, color=C["text_dim"]),
+        cliponaxis=False,
+    ))
+    x_max = float(x_vals.max())
+    fig.update_layout(
+        xaxis_title=x_title,
+        xaxis=dict(range=[0, x_max * 1.42]),
+    )
+    _plotly_dark(fig, height=height, margin=dict(l=10, r=20, t=10, b=20))
+    # title_font configurado em _plotly_dark precisa de text="" para não renderizar "undefined"
+    fig.update_layout(title_text="", showlegend=False)
+    st.markdown(
+        f"<div style='font-size:12px; font-weight:600; color:{C['text']}; margin-bottom:4px;'>"
+        f"{titulo}</div>",
+        unsafe_allow_html=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _folhas_rtn(df_rtn: pd.DataFrame) -> list:
+    """
+    Retorna as discriminações 'folha' de despesa (4.xx) da RTN:
+    itens mais granulares disponíveis, excluindo totais e sub-totais.
+    Uma série é folha se nenhuma outra série tem seu código como prefixo.
+    """
+    series_desp = [s for s in df_rtn["discriminacao"].unique() if s.startswith("4.")]
+
+    def _cod(s: str) -> str:
+        return s.split(" ")[0].rstrip(".")
+
+    codigos = {_cod(s) for s in series_desp}
+    folhas = []
+    for serie in series_desp:
+        cod = _cod(serie)
+        if cod == "4":
+            continue  # total geral
+        is_parent = any(c != cod and c.startswith(cod + ".") for c in codigos)
+        if not is_parent:
+            folhas.append(serie)
+    return folhas
+
+
+def _rtn_top_n_df(
+    df_rtn: pd.DataFrame, ano: int, mes: int, col_val: str,
+    n: int = 5, modo: str = "mes",
+) -> pd.DataFrame:
+    """Top N itens folha da RTN por valor no período (mês ou acumulado 12m)."""
+    folhas = _folhas_rtn(df_rtn)
+    rows = []
+    for serie in folhas:
+        v = (
+            _rtn_valor(df_rtn, serie, ano, mes, col_val)
+            if modo == "mes"
+            else _rtn_soma_12m(df_rtn, serie, ano, mes, col_val)
+        )
+        if v is not None and v > 0:
+            partes = serie.split(" ", 1)
+            nome = partes[1].strip() if len(partes) > 1 else serie
+            rows.append({"discriminacao": serie, "nome": nome, "valor": v})
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).nlargest(n, "valor")
+
+
+def _render_top_n_rtn(
+    df_rtn: pd.DataFrame, ano: int, mes: int, col_val: str, is_pib: bool,
+    titulo: str, n: int = 5, modo: str = "mes",
+):
+    """Gráfico horizontal top N rubricas a partir das séries folha da RTN.
+    Fonte única e consistente com o gráfico de composição."""
+    import textwrap
+
+    df = _rtn_top_n_df(df_rtn, ano, mes, col_val, n, modo)
+    if df.empty:
+        st.info("Sem dados RTN para o período.")
+        return
+    df = df.sort_values("valor", ascending=True).copy()
+
+    def _wrap(s: str) -> str:
+        return "<br>".join(textwrap.wrap(str(s), 24))
+
+    df["label"] = df["nome"].apply(_wrap)
+
+    n_bars = len(df)
+    altura = max(220, n_bars * 72 + 70)
+
+    if is_pib:
+        x_vals  = df["valor"]
+        x_title = "% do PIB"
+        texts   = df["valor"].apply(lambda v: f"{_fmt(v, 1)}%")
+    else:
+        x_vals  = df["valor"] / 1e3   # corrente_milhoes → bilhões
+        x_title = "R$ bilhões"
+        texts   = df["valor"].apply(lambda v: f"R$ {_fmt(v / 1e3, 1)} bi")
+
+    x_max = float(x_vals.max()) if len(x_vals) > 0 else 1.0
+
+    fig = go.Figure(go.Bar(
+        x=x_vals, y=df["label"], orientation="h",
+        marker_color=C["warning"],
+        marker_line_width=0,
+        text=texts, textposition="outside",
+        textfont=dict(size=11, color=C["text_dim"]),
+        cliponaxis=False,
+    ))
+    fig.update_layout(
+        xaxis_title=x_title,
+        xaxis=dict(range=[0, x_max * 1.55]),
+    )
+    _plotly_dark(fig, height=altura, margin=dict(l=175, r=20, t=10, b=30))
+    fig.update_layout(title_text="", showlegend=False)
+    st.markdown(
+        f"<div style='font-size:12px; font-weight:600; color:{C['text']}; margin-bottom:4px;'>"
+        f"{titulo}</div>",
+        unsafe_allow_html=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _calcular_base_contador(df_rtn: pd.DataFrame, contador: dict) -> float:
+    """Soma real (R$) dos meses anteriores ao mês projetado pelo contador."""
+    mes_ref = contador.get("mes_referencia", "")
+    if not mes_ref:
+        return 0.0
+    ano_prev = int(mes_ref[:4])
+    mes_prev = int(mes_ref[5:7])
+    serie = df_rtn[df_rtn["discriminacao"].str.startswith("4. ")]
+    mask  = (serie["ano"] == ano_prev) & (serie["mes"] < mes_prev)
+    return float(serie[mask]["corrente_milhoes"].sum()) * 1_000_000
+
+
+def _contador_html(
+    acc_base_rs: float,
+    taxa_rs: float,
+    start_ms: int,
+    mes_ref: str,
+    ultimo_dado: str,
+) -> str:
+    ano_ref = mes_ref[:4]
+    mes_ref_fmt  = mes_ref[5:7] + "/" + mes_ref[:4]
+    ult_fmt      = ultimo_dado[5:7] + "/" + ultimo_dado[:4]
+    return f"""
+<div style="
+    background: linear-gradient(135deg, {C['bg']} 0%, {C['bg3']} 100%);
+    border: 2px solid {C['border']};
+    border-radius: 16px;
+    padding: 24px 40px 20px;
+    text-align: center;
+">
+    <div style="font-size:10px; letter-spacing:3px; color:{C['accent']};
+                font-weight:700; text-transform:uppercase; margin-bottom:10px;">
+        Gastos Acumulados do Governo Federal — {ano_ref}
+    </div>
+    <div id="cnt-valor" style="
+        font-size:54px; font-weight:700; color:{C['text']};
+        font-family: 'Courier New', monospace;
+        letter-spacing:-1px; line-height:1.15;
+    ">R$&nbsp;—</div>
+    <div id="cnt-info" style="font-size:11px; color:{C['text_muted']}; margin-top:8px;">
+        calculando...
+    </div>
+    <div style="font-size:10px; color:{C['text_muted']}; margin-top:6px; opacity:0.6;">
+        Dados reais até {ult_fmt} · Projeção {mes_ref_fmt} pela fórmula ratio rolling 12m
+        · R$&nbsp;{taxa_rs:,.0f}/s
+    </div>
+</div>
+<script>
+(function() {{
+    const accBase = {acc_base_rs:.2f};
+    const taxa    = {taxa_rs:.4f};
+    const startMs = {start_ms};
+
+    function fmt(n) {{
+        return 'R$ ' + n.toLocaleString('pt-BR', {{
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }});
+    }}
+
+    function update() {{
+        const elapsedSec = Math.max(0, (Date.now() - startMs) / 1000);
+        const total = accBase + elapsedSec * taxa;
+        const bi    = (total / 1e9).toLocaleString('pt-BR', {{
+            minimumFractionDigits: 1, maximumFractionDigits: 1
+        }});
+        document.getElementById('cnt-valor').innerHTML = fmt(total);
+        document.getElementById('cnt-info').innerText  = 'R$ ' + bi + ' bilhões';
+    }}
+
+    setInterval(update, 100);
+    update();
+}})();
+</script>
+"""
+
+
+# -- Aba 0: Gastos do Governo Federal --------------------------------------
+
+def aba_gastos_governo(dados, filtros, col_val, is_pib):
+    df_rtn = dados.get("rtn", pd.DataFrame())
+    df_nat = dados.get("natureza", pd.DataFrame())
+    contador = dados.get("contador", {})
+
+    if df_rtn.empty:
+        st.info("Execute `python pipelines/rtn/load.py` para baixar os dados.")
+        return
+
+    ano, mes = filtros["ano"], filtros["mes"]
+
+    # ── Contador em tempo real ─────────────────────────────────────────────
+    if contador:
+        mes_ref  = contador.get("mes_referencia", "")
+        ano_prev = int(mes_ref[:4])
+        mes_prev = int(mes_ref[5:7])
+        start_dt = datetime(ano_prev, mes_prev, 1, 0, 0, 0, tzinfo=timezone.utc)
+        start_ms = int(start_dt.timestamp() * 1000)
+        acc_base_rs = _calcular_base_contador(df_rtn, contador)
+        taxa_rs     = contador.get("taxa_por_segundo_rs", 0.0)
+        ultimo_dado = contador.get("ultimo_dado_rtn", "")
+
+        st.components.v1.html(
+            _contador_html(acc_base_rs, taxa_rs, start_ms, mes_ref, ultimo_dado),
+            height=168,
+        )
+    else:
+        st.info(
+            "Execute `python pipelines/contador_fiscal.py` para habilitar "
+            "o contador em tempo real."
+        )
+
+    st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+
+    # ── Helpers de valor ──────────────────────────────────────────────────
+    def val(p):    return _rtn_valor(df_rtn, p, ano, mes, col_val)
+    def s12(p):    return _rtn_soma_12m(df_rtn, p, ano, mes, col_val)
+    def dlt(p):    return _rtn_delta(df_rtn, p, ano, mes, col_val)
+    def dlt12(p):  return _rtn_delta(
+        df_rtn, p, ano, mes, col_val,
+        fn=lambda pp, aa, mm: _rtn_soma_12m(df_rtn, pp, aa, mm, col_val),
+    )
+    def fv(v):     return _fmt_rtn(v, is_pib)
+    def ds(d):
+        if d is None:
+            return None
+        return f"{'+' if d > 0 else ''}{_fmt(d, 1)}% m/m"
+
+    # ── Bloco: Mês ────────────────────────────────────────────────────────
+    st.markdown(
+        f"<div class='kpi-sub'>Mês: <strong style='color:{C['text']}'>"
+        f"{MES_LABELS.get(mes, mes)}/{ano}</strong></div>",
+        unsafe_allow_html=True,
+    )
+    _card_metrica_grande(
+        f"Despesa Total — {MES_LABELS.get(mes, mes)}/{ano}",
+        fv(val("4. ")),
+        ds(dlt("4. ")),
+    )
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        _render_comp_rtn(
+            fn_valor=lambda p: val(p),
+            is_pib=is_pib,
+            titulo=f"Composição — {MES_LABELS.get(mes, mes)}/{ano}",
+            height=240,
+        )
+    with col_g2:
+        _render_top_n_rtn(
+            df_rtn, ano, mes, col_val, is_pib,
+            titulo=f"Rubricas (top 5) — {MES_LABELS.get(mes, mes)}/{ano}",
+            n=5, modo="mes",
+        )
+
+    st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+
+    # ── Bloco: Acumulado 12 meses ─────────────────────────────────────────
+    st.markdown("<div class='kpi-sub'>Acumulado 12 meses</div>", unsafe_allow_html=True)
+    sufixo_12m = "média 12m" if is_pib else "soma 12m"
+    _card_metrica_grande(
+        f"Despesa Total — Acumulado 12 meses ({sufixo_12m})",
+        fv(s12("4. ")),
+        ds(dlt12("4. ")),
+    )
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        _render_comp_rtn(
+            fn_valor=lambda p: s12(p),
+            is_pib=is_pib,
+            titulo="Composição — acumulado 12 meses",
+            height=240,
+        )
+    with col_g2:
+        _render_top_n_rtn(
+            df_rtn, ano, mes, col_val, is_pib,
+            titulo="Rubricas (top 5) — acumulado 12 meses",
+            n=5, modo="12m",
+        )
+
+    st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+
+    # ── Explorador de séries de despesa (RTN, filtrado a "4.") ────────────
+    st.markdown(
+        f"<div style='font-size:14px; font-weight:600; color:{C['text']}; margin-bottom:10px;'>"
+        "Explorador de Despesas</div>",
+        unsafe_allow_html=True,
+    )
+
+    series_desp = sorted([s for s in df_rtn["discriminacao"].unique() if s.startswith("4.")])
+    serie_sel   = st.selectbox("Série de despesa", series_desp, key="gastos_serie_desp")
+
+    sub = df_rtn[df_rtn["discriminacao"] == serie_sel].sort_values(["ano", "mes"]).copy()
+    if not sub.empty:
+        sub["data"] = pd.to_datetime(
+            sub["ano"].astype(str) + "-" + sub["mes"].astype(str).str.zfill(2) + "-01"
+        )
+        y_label  = "% do PIB" if is_pib else "R$ Milhões"
+        data_fim = pd.Timestamp(f"{ano}-{mes:02d}-01")
+        data_ini = data_fim - pd.DateOffset(years=3)
+
+        fig = px.line(
+            sub, x="data", y=col_val,
+            labels={col_val: y_label, "data": ""},
+            title=serie_sel,
+            color_discrete_sequence=[C["despesa"]],
+        )
+        fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.15)", opacity=0.8)
+        fig.update_layout(
+            xaxis=dict(
+                tickformat="%m/%Y",
+                range=[str(data_ini.date()), str((data_fim + pd.DateOffset(months=1)).date())],
+                rangeslider=dict(**_RSLD),
+                rangeselector=dict(**_RSEL, buttons=[
+                    dict(count=1,  label="1a",  step="year", stepmode="backward"),
+                    dict(count=3,  label="3a",  step="year", stepmode="backward"),
+                    dict(count=5,  label="5a",  step="year", stepmode="backward"),
+                    dict(step="all", label="Máx"),
+                ]),
+            ),
+        )
+        _plotly_dark(fig, height=400, margin=dict(l=10, r=10, t=40, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+        p_sel   = ano * 100 + mes
+        sub_p   = sub["ano"] * 100 + sub["mes"]
+        ultimos = (
+            sub[sub_p <= p_sel]
+            .tail(24)
+            .sort_values(["ano", "mes"], ascending=False)
+            .copy()
+        )
+        ultimos["Período"] = ultimos["mes"].map(MES_LABELS) + "/" + ultimos["ano"].astype(str)
+        ultimos["Valor"]   = ultimos[col_val].apply(
+            lambda v: _fmt_rtn(v, is_pib) if pd.notna(v) else "—"
+        )
+        st.dataframe(ultimos[["Período", "Valor"]], hide_index=True, use_container_width=True)
+
+        csv = sub.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Baixar CSV",
+            data=csv,
+            file_name=f"despesa_{serie_sel[:40].replace(' ', '_').replace('.', '')}.csv",
+            mime="text/csv",
+        )
+
+    st.caption(
+        "Fonte: RTN · Secretaria do Tesouro Nacional · "
+        "Séries de Despesa Total e subcategorias."
+    )
 
 
 # -- Aba 1: Resultado Fiscal (RTN) -----------------------------------------
@@ -210,7 +884,6 @@ def aba_resultado_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
 
     ano, mes = filtros["ano"], filtros["mes"]
 
-    # Closures sobre df, col_val, is_pib, ano, mes
     def val(p):   return _rtn_valor(df, p, ano, mes, col_val)
     def s12(p):   return _rtn_soma_12m(df, p, ano, mes, col_val)
     def dlt(p):   return _rtn_delta(df, p, ano, mes, col_val)
@@ -224,44 +897,42 @@ def aba_resultado_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
             return None
         return f"{'+' if d > 0 else ''}{_fmt(d, 1)}% m/m"
 
-    # -- Linha 1: KPIs do mes --------------------------------------------
+    # -- Linha 1: KPIs do mes
     st.markdown(
-        f"<div class='kpi-sub'>Mes: "
-        f"<strong>{MES_LABELS.get(mes, mes)}/{ano}</strong></div>",
+        f"<div class='kpi-sub'>Mês: <strong style='color:{C['text']}'>"
+        f"{MES_LABELS.get(mes, mes)}/{ano}</strong></div>",
         unsafe_allow_html=True,
     )
     for col, (prefixo, label, help_) in zip(st.columns(4), KPIS_RTN):
         with col:
             st.metric(label, fv(val(prefixo)), delta=ds(dlt(prefixo)), help=help_)
 
-    st.markdown(
-        "<hr style='border:none; border-top:1px dashed #ccc; margin:12px 0 10px 0;'>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<div class='section-divider'></div>", unsafe_allow_html=True)
 
-    # -- Linha 2: KPIs acumulado 12 meses --------------------------------
-    st.markdown(
-        "<div class='kpi-sub'>Acumulado 12 meses</div>",
-        unsafe_allow_html=True,
-    )
-    sufixo_12m = "(media 12m)" if is_pib else "(soma 12m)"
+    # -- Linha 2: KPIs acumulado 12 meses
+    st.markdown("<div class='kpi-sub'>Acumulado 12 meses</div>", unsafe_allow_html=True)
+    sufixo_12m = "(média 12m)" if is_pib else "(soma 12m)"
     for col, (prefixo, label, help_) in zip(st.columns(4), KPIS_RTN):
         with col:
             st.metric(
                 f"{label} {sufixo_12m}",
                 fv(s12(prefixo)),
                 delta=ds(dlt12(prefixo)),
-                help=f"{help_} {'Media' if is_pib else 'Soma'} dos ultimos 12 meses.",
+                help=f"{help_} {'Média' if is_pib else 'Soma'} dos últimos 12 meses.",
             )
 
-    st.markdown("---")
+    st.markdown(f"<div class='section-divider'></div>", unsafe_allow_html=True)
 
     col_esq, col_dir = st.columns([3, 2])
 
-    # -- Grafico de linha: Receita x Despesa x Resultado -----------------
+    # -- Grafico de linha: Receita x Despesa x Resultado
     with col_esq:
-        y_label = "% do PIB" if is_pib else "R$ Milhoes"
-        st.subheader("Receita x Despesa x Resultado Primario")
+        y_label = "% do PIB" if is_pib else "R$ Milhões"
+        st.markdown(
+            f"<div style='font-size:13px; font-weight:600; color:{C['text']}; margin-bottom:8px;'>"
+            "Receita × Despesa × Resultado Primário</div>",
+            unsafe_allow_html=True,
+        )
 
         p_sel = ano * 100 + mes
         linhas = []
@@ -278,67 +949,70 @@ def aba_resultado_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
         fig = px.line(
             df_chart, x="data", y="valor", color="serie",
             color_discrete_map={
-                "Receita Liquida":  "#27AE60",
-                "Despesa Total":    "#E74C3C",
-                "Result. Primario": "#2E86C1",
+                "Receita Líquida":  C["receita"],
+                "Despesa Total":    C["despesa"],
+                "Result. Primário": C["resultado"],
             },
             labels={"valor": y_label, "data": "", "serie": ""},
         )
-        fig.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.6)
+        fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.15)", opacity=0.8)
         data_fim = pd.Timestamp(f"{ano}-{mes:02d}-01")
         data_ini = data_fim - pd.DateOffset(years=3)
         fig.update_layout(
-            height=420,
-            font=dict(size=13),
-            legend=dict(orientation="h", yanchor="top", y=-0.22,
-                        xanchor="center", x=0.5, title="", font=dict(size=13)),
-            margin=dict(l=10, r=10, t=20, b=10),
+            legend=dict(
+                orientation="h", yanchor="top", y=-0.22,
+                xanchor="center", x=0.5, title="",
+                font=dict(size=12, color=C["text"]),
+                bgcolor="rgba(13,27,46,0.9)",
+                bordercolor=C["border"], borderwidth=1,
+            ),
             xaxis=dict(
                 tickformat="%m/%Y",
-                tickfont=dict(size=12),
-                title_font=dict(size=13),
+                tickfont=dict(size=11, color=C["text_dim"]),
+                title_font=dict(size=12),
                 range=[str(data_ini.date()), str((data_fim + pd.DateOffset(months=1)).date())],
-                rangeslider=dict(visible=True, thickness=0.06),
-                rangeselector=dict(buttons=[
+                rangeslider=dict(**_RSLD),
+                rangeselector=dict(**_RSEL, buttons=[
                     dict(count=1,  label="1a",  step="year", stepmode="backward"),
                     dict(count=3,  label="3a",  step="year", stepmode="backward"),
                     dict(count=5,  label="5a",  step="year", stepmode="backward"),
-                    dict(step="all", label="Max"),
+                    dict(step="all", label="Máx"),
                 ]),
             ),
-            yaxis=dict(tickfont=dict(size=12), title_font=dict(size=13)),
         )
+        _plotly_dark(fig, height=420, margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
         # Resultado primario acumulado no ano (barras)
-        st.markdown(f"**Resultado primario acumulado {ano}**")
+        st.markdown(
+            f"<div style='font-size:12px; font-weight:600; color:{C['text']}; margin-bottom:4px;'>"
+            f"Resultado primário acumulado {ano}</div>",
+            unsafe_allow_html=True,
+        )
         df_ytd = _rtn_serie(df, "5. ")
         df_ytd = df_ytd[(df_ytd["ano"] == ano) & (df_ytd["mes"] <= mes)].sort_values("mes").copy()
         if not df_ytd.empty:
             df_ytd["acumulado"] = df_ytd[col_val].cumsum()
             df_ytd["label"]     = df_ytd["mes"].map(MES_LABELS)
             y_acum  = df_ytd["acumulado"] / (1 if is_pib else 1e3)
-            y_title = "% do PIB (acum.)" if is_pib else "R$ bilhoes (acum.)"
+            y_title = "% do PIB (acum.)" if is_pib else "R$ bilhões (acum.)"
             texts_y = [
                 f"{_fmt(v, 1)}%" if is_pib else f"R$ {_fmt(v, 1)} bi"
                 for v in y_acum
             ]
             fig3 = go.Figure(go.Bar(
                 x=df_ytd["label"], y=y_acum,
-                marker_color=["#27AE60" if v >= 0 else "#E74C3C" for v in y_acum],
+                marker_color=[C["positive"] if v >= 0 else C["negative"] for v in y_acum],
+                marker_line_width=0,
                 text=texts_y, textposition="outside",
+                textfont=dict(size=11, color=C["text_dim"]),
             ))
-            fig3.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.6)
-            fig3.update_layout(
-                yaxis_title=y_title, height=240,
-                font=dict(size=13),
-                yaxis=dict(tickfont=dict(size=12), title_font=dict(size=13)),
-                xaxis=dict(tickfont=dict(size=12)),
-                margin=dict(l=10, r=10, t=10, b=10),
-            )
+            fig3.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.15)", opacity=0.8)
+            fig3.update_layout(yaxis_title=y_title)
+            _plotly_dark(fig3, height=240, margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig3, use_container_width=True)
 
-    # -- Composicao da despesa (mensal + 12m) ----------------------------
+    # -- Composicao da despesa (mensal + 12m)
     with col_dir:
         def _comp_chart(titulo, fn_valor, height=270):
             items = [{"Categoria": n, "Valor": fn_valor(p)} for p, n in COMP_DESPESA]
@@ -352,44 +1026,42 @@ def aba_resultado_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
                 texts   = df_c["Valor"].apply(lambda v: f"{_fmt(v, 1)}%")
             else:
                 x_vals  = df_c["Valor"] / 1e3
-                x_title = "R$ bilhoes"
+                x_title = "R$ bilhões"
                 texts   = df_c["Valor"].apply(lambda v: f"R$ {_fmt(v / 1e3, 1)} bi")
             fig2 = go.Figure(go.Bar(
                 x=x_vals, y=df_c["Categoria"], orientation="h",
-                marker_color="#E74C3C", text=texts, textposition="outside",
+                marker_color=C["despesa"],
+                marker_line_width=0,
+                text=texts, textposition="outside",
+                textfont=dict(size=12, color=C["text_dim"]),
                 cliponaxis=False,
             ))
-            # Estende o eixo X 35% além do maior valor para garantir que
-            # os rótulos externos caibam sem serem truncados
             x_max = float(x_vals.max())
             fig2.update_layout(
-                xaxis_title=x_title, height=height,
-                font=dict(size=13),
-                xaxis=dict(
-                    range=[0, x_max * 1.38],
-                    tickfont=dict(size=12),
-                    title_font=dict(size=13),
-                ),
-                yaxis=dict(tickfont=dict(size=13)),
-                margin=dict(l=10, r=20, t=10, b=20),
+                xaxis_title=x_title,
+                xaxis=dict(range=[0, x_max * 1.42]),
             )
-            fig2.update_traces(textfont_size=13)
-            st.markdown(f"**{titulo}**")
+            _plotly_dark(fig2, height=height, margin=dict(l=10, r=20, t=10, b=20))
+            st.markdown(
+                f"<div style='font-size:12px; font-weight:600; color:{C['text']}; margin-bottom:4px;'>"
+                f"{titulo}</div>",
+                unsafe_allow_html=True,
+            )
             st.plotly_chart(fig2, use_container_width=True)
 
         _comp_chart(
-            f"Composicao da despesa — {MES_LABELS.get(mes, mes)}/{ano}",
+            f"Composição da despesa — {MES_LABELS.get(mes, mes)}/{ano}",
             lambda p: val(p),
         )
         _comp_chart(
-            "Composicao da despesa — acumulado 12 meses",
+            "Composição da despesa — acumulado 12 meses",
             lambda p: s12(p),
         )
 
-    unidade = "% do PIB (media 12m)" if is_pib else "R$ milhoes"
+    unidade = "% do PIB (média 12m)" if is_pib else "R$ milhões"
     st.caption(
         f"Fonte: RTN · Secretaria do Tesouro Nacional · {unidade} · "
-        "Atualizacao: `python pipelines/rtn/load.py`"
+        "Atualização: `python pipelines/rtn/load.py`"
     )
 
 
@@ -398,7 +1070,7 @@ def aba_resultado_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
 def aba_alertas_rtn(dados, filtros, col_val, is_pib):
     df = dados.get("rtn", pd.DataFrame())
     if df.empty:
-        st.info("Dados RTN nao encontrados.")
+        st.info("Dados RTN não encontrados.")
         return
 
     ano, mes = filtros["ano"], filtros["mes"]
@@ -445,17 +1117,22 @@ def aba_alertas_rtn(dados, filtros, col_val, is_pib):
         return
 
     st.markdown(
-        f"**{len(alertas)} alerta(s) em "
-        f"{MES_LABELS.get(mes, mes)}/{ano}** — z-score calculado sobre janela de 24 meses"
+        f"<div style='font-size:13px; font-weight:600; color:{C['text']}; margin-bottom:12px;'>"
+        f"{len(alertas)} alerta(s) em {MES_LABELS.get(mes, mes)}/{ano}"
+        f"<span style='font-size:11px; color:{C['text_muted']}; font-weight:400;'>"
+        f" — z-score calculado sobre janela de 24 meses</span></div>",
+        unsafe_allow_html=True,
     )
     for a in sorted(alertas, key=lambda x: abs(x["zscore"]), reverse=True):
         css   = f"alerta-{a['nivel']}"
-        icone = "🔴" if a["nivel"] == "vermelho" else "🟡"
+        icone = "●" if a["nivel"] == "vermelho" else "◆"
+        cor   = C["negative"] if a["nivel"] == "vermelho" else C["warning"]
         v_fmt = _fmt_rtn(a["valor"], is_pib)
         st.markdown(
             f'<div class="{css}">'
-            f'{icone} <strong>{a["serie"]}</strong>'
-            f' &nbsp;|&nbsp; Z-score: <strong>{a["zscore"]:.1f}σ</strong>'
+            f'<span style="color:{cor}; font-size:14px;">{icone}</span> '
+            f'<strong>{a["serie"]}</strong>'
+            f' &nbsp;|&nbsp; Z-score: <strong style="color:{cor}">{a["zscore"]:.1f}σ</strong>'
             f' &nbsp;|&nbsp; Valor: <strong>{v_fmt}</strong>'
             f'</div>',
             unsafe_allow_html=True,
@@ -467,21 +1144,25 @@ def aba_alertas_rtn(dados, filtros, col_val, is_pib):
 def aba_vigilancia_rtn(dados, filtros, col_val, is_pib):
     df = dados.get("rtn", pd.DataFrame())
     if df.empty:
-        st.info("Dados RTN nao encontrados.")
+        st.info("Dados RTN não encontrados.")
         return
 
     ano, mes = filtros["ano"], filtros["mes"]
 
-    st.subheader(f"Painel de indicadores — {MES_LABELS.get(mes, mes)}/{ano}")
+    st.markdown(
+        f"<div style='font-size:15px; font-weight:600; color:{C['text']}; margin-bottom:12px;'>"
+        f"Painel de indicadores — {MES_LABELS.get(mes, mes)}/{ano}</div>",
+        unsafe_allow_html=True,
+    )
 
     SERIES_VIG = [
-        ("3. ",   "Receita Liquida"),
+        ("3. ",   "Receita Líquida"),
         ("4. ",   "Despesa Total"),
-        ("4.1 ",  "   Benef. Previdenciarios"),
+        ("4.1 ",  "   Benef. Previdenciários"),
         ("4.2 ",  "   Pessoal e Encargos"),
-        ("4.3 ",  "   Outras Obrigatorias"),
-        ("4.4.2", "   Discricionarias"),
-        ("5. ",   "Resultado Primario"),
+        ("4.3 ",  "   Outras Obrigatórias"),
+        ("4.4.2", "   Discricionárias"),
+        ("5. ",   "Resultado Primário"),
         ("10.",   "Resultado Nominal"),
     ]
 
@@ -509,22 +1190,26 @@ def aba_vigilancia_rtn(dados, filtros, col_val, is_pib):
 
         rows.append({
             "Indicador":     nome,
-            "Mes atual":     _fmt_rtn(v_atual, is_pib),
+            "Mês atual":     _fmt_rtn(v_atual, is_pib),
             "Acum. 12m":     _fmt_rtn(v_12m, is_pib),
             f"{ano - 1}":    _fmt_rtn(v_ant, is_pib),
             "Var. a/a":      (f"{'+' if var_yoy > 0 else ''}{_fmt(var_yoy, 1)}%"
                               if var_yoy is not None else "—"),
-            "Media 3 anos":  _fmt_rtn(v_media, is_pib) if v_media is not None else "—",
+            "Média 3 anos":  _fmt_rtn(v_media, is_pib) if v_media is not None else "—",
         })
 
     if rows:
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    st.markdown("---")
+    st.markdown(f"<div class='section-divider'></div>", unsafe_allow_html=True)
 
-    # Trajetoria do Resultado Primario acumulado 12m (historico completo)
-    st.subheader("Trajetoria fiscal — Resultado Primario acumulado 12 meses")
-    st.caption("Soma rolling de 12 meses. Linha abaixo de zero = deficit acumulado.")
+    # Trajetoria do Resultado Primario acumulado 12m
+    st.markdown(
+        f"<div style='font-size:15px; font-weight:600; color:{C['text']}; margin-bottom:4px;'>"
+        "Trajetória fiscal — Resultado Primário acumulado 12 meses</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Soma rolling de 12 meses. Linha abaixo de zero = déficit acumulado.")
 
     sub_res = _rtn_serie(df, "5. ").sort_values(["ano", "mes"]).copy()
     p_sel   = ano * 100 + mes
@@ -540,39 +1225,37 @@ def aba_vigilancia_rtn(dados, filtros, col_val, is_pib):
 
     if traj:
         df_traj = pd.DataFrame(traj).sort_values("periodo")
-        # "MM/YYYY" → datetime para o rangeslider funcionar
         df_traj["data"] = pd.to_datetime(
             df_traj["label"].str[3:] + "-" + df_traj["label"].str[:2] + "-01"
         )
-        y_title = "% do PIB (12m)" if is_pib else "R$ bilhoes (12m)"
+        y_title = "% do PIB (12m)" if is_pib else "R$ bilhões (12m)"
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df_traj["data"], y=df_traj["valor"],
             mode="lines+markers", fill="tozeroy",
-            line_color="#2E86C1", fillcolor="rgba(46,134,193,0.12)",
+            line=dict(color=C["resultado"], width=2),
+            fillcolor=f"rgba(56,189,248,0.08)",
+            marker=dict(size=3, color=C["resultado"]),
         ))
-        fig.add_hline(y=0, line_dash="dot", line_color="#E74C3C", opacity=0.7)
+        fig.add_hline(y=0, line_dash="dot", line_color=C["negative"], opacity=0.5)
         data_fim = pd.Timestamp(f"{ano}-{mes:02d}-01")
         data_ini = data_fim - pd.DateOffset(years=5)
         fig.update_layout(
-            yaxis_title=y_title, height=400, showlegend=False,
-            font=dict(size=13),
-            margin=dict(l=10, r=10, t=30, b=10),
+            yaxis_title=y_title,
+            showlegend=False,
             xaxis=dict(
                 tickformat="%m/%Y",
-                tickfont=dict(size=12),
-                title_font=dict(size=13),
                 range=[str(data_ini.date()), str((data_fim + pd.DateOffset(months=1)).date())],
-                rangeslider=dict(visible=True, thickness=0.06),
-                rangeselector=dict(buttons=[
+                rangeslider=dict(**_RSLD),
+                rangeselector=dict(**_RSEL, buttons=[
                     dict(count=2,  label="2a",  step="year", stepmode="backward"),
                     dict(count=5,  label="5a",  step="year", stepmode="backward"),
                     dict(count=10, label="10a", step="year", stepmode="backward"),
-                    dict(step="all", label="Max"),
+                    dict(step="all", label="Máx"),
                 ]),
             ),
-            yaxis=dict(tickfont=dict(size=12), title_font=dict(size=13)),
         )
+        _plotly_dark(fig, height=400, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -581,62 +1264,63 @@ def aba_vigilancia_rtn(dados, filtros, col_val, is_pib):
 def aba_explorador_rtn(dados, filtros, col_val, is_pib, opcao_sel):
     df = dados.get("rtn", pd.DataFrame())
     if df.empty:
-        st.info("Dados RTN nao encontrados.")
+        st.info("Dados RTN não encontrados.")
         return
 
     ano, mes = filtros["ano"], filtros["mes"]
 
     series_disp = sorted(df["discriminacao"].unique().tolist())
-    serie_sel   = st.selectbox("Serie fiscal", series_disp)
+    serie_sel   = st.selectbox("Série fiscal", series_disp)
 
     sub = df[df["discriminacao"] == serie_sel].sort_values(["ano", "mes"]).copy()
     if sub.empty:
-        st.info("Serie sem dados.")
+        st.info("Série sem dados.")
         return
 
     sub["data"] = pd.to_datetime(
         sub["ano"].astype(str) + "-" + sub["mes"].astype(str).str.zfill(2) + "-01"
     )
-    y_label = "% do PIB" if is_pib else "R$ Milhoes"
+    y_label = "% do PIB" if is_pib else "R$ Milhões"
 
     fig = px.line(
         sub, x="data", y=col_val,
         labels={col_val: y_label, "data": ""},
         title=serie_sel,
+        color_discrete_sequence=[C["resultado"]],
     )
-    fig.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.6)
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.15)", opacity=0.8)
     data_fim = pd.Timestamp(f"{ano}-{mes:02d}-01")
     data_ini = data_fim - pd.DateOffset(years=3)
     fig.update_layout(
-        height=400, font=dict(size=13),
-        margin=dict(l=10, r=10, t=40, b=10),
         xaxis=dict(
             tickformat="%m/%Y",
-            tickfont=dict(size=12),
-            title_font=dict(size=13),
             range=[str(data_ini.date()), str((data_fim + pd.DateOffset(months=1)).date())],
-            rangeslider=dict(visible=True, thickness=0.06),
-            rangeselector=dict(buttons=[
+            rangeslider=dict(**_RSLD),
+            rangeselector=dict(**_RSEL, buttons=[
                 dict(count=1,  label="1a",  step="year", stepmode="backward"),
                 dict(count=3,  label="3a",  step="year", stepmode="backward"),
                 dict(count=5,  label="5a",  step="year", stepmode="backward"),
-                dict(step="all", label="Max"),
+                dict(step="all", label="Máx"),
             ]),
         ),
-        yaxis=dict(tickfont=dict(size=12), title_font=dict(size=13)),
     )
+    _plotly_dark(fig, height=400, margin=dict(l=10, r=10, t=40, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
     # Ultimos 24 meses em tabela
-    st.markdown("**Ultimos 24 meses**")
+    st.markdown(
+        f"<div style='font-size:12px; font-weight:600; color:{C['text']}; margin-bottom:6px;'>"
+        "Últimos 24 meses</div>",
+        unsafe_allow_html=True,
+    )
     p_sel   = ano * 100 + mes
     sub_p   = sub["ano"] * 100 + sub["mes"]
     ultimos = sub[sub_p <= p_sel].tail(24).sort_values(["ano", "mes"], ascending=False).copy()
-    ultimos["Periodo"] = ultimos["mes"].map(MES_LABELS) + "/" + ultimos["ano"].astype(str)
+    ultimos["Período"] = ultimos["mes"].map(MES_LABELS) + "/" + ultimos["ano"].astype(str)
     ultimos["Valor"]   = ultimos[col_val].apply(
         lambda v: _fmt_rtn(v, is_pib) if pd.notna(v) else "—"
     )
-    st.dataframe(ultimos[["Periodo", "Valor"]], hide_index=True, use_container_width=True)
+    st.dataframe(ultimos[["Período", "Valor"]], hide_index=True, use_container_width=True)
 
     csv = sub.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -680,10 +1364,9 @@ def aba_previsao(dados):
         label_sel = "Selecionar natureza de despesa"
 
     if df_prev.empty:
-        st.info(f"Sem previsões disponíveis para a granularidade selecionada.")
+        st.info("Sem previsões disponíveis para a granularidade selecionada.")
         return
 
-    # Monta dropdown só com grupos que têm previsão calculada
     grupos_com_prev = df_prev[col_grupo].unique()
     opcoes = (
         df_hist[df_hist[col_grupo].isin(grupos_com_prev)]
@@ -700,7 +1383,6 @@ def aba_previsao(dados):
     if grupo_sel is None:
         return
 
-    # Dados históricos e de previsão para o grupo selecionado
     hist = (
         df_hist[df_hist[col_grupo] == grupo_sel]
         .sort_values(["ano", "mes"])
@@ -724,12 +1406,9 @@ def aba_previsao(dados):
         return
 
     ultima_data = hist["data"].max()
-
-    # Limita o histórico aos últimos 36 meses para não poluir o gráfico
     corte = ultima_data - pd.DateOffset(months=35)
     hist_plot = hist[hist["data"] >= corte].copy()
 
-    # Escala: decide entre R$ milhões e R$ bilhões conforme magnitude
     max_val = max(
         hist_plot["valor_pago"].abs().max(),
         prev["previsao_ic_alto"].abs().max(),
@@ -739,10 +1418,9 @@ def aba_previsao(dados):
     else:
         escala, unidade = 1e6, "R$ milhões"
 
-    # ── Gráfico ──────────────────────────────────────────────────────────
     fig = go.Figure()
 
-    # Banda de confiança (IC p25-p75)
+    # Banda de confianca (IC p25-p75)
     x_band = pd.concat([prev["data"], prev["data"][::-1]])
     y_band = pd.concat([
         prev["previsao_ic_alto"] / escala,
@@ -751,69 +1429,68 @@ def aba_previsao(dados):
     fig.add_trace(go.Scatter(
         x=x_band, y=y_band,
         fill="toself",
-        fillcolor="rgba(230, 126, 34, 0.15)",
+        fillcolor=f"rgba(245,158,11,0.12)",
         line=dict(color="rgba(0,0,0,0)"),
         name="Intervalo de confiança (p25–p75)",
         hoverinfo="skip",
     ))
 
-    # Linha histórica
+    # Linha historica
     fig.add_trace(go.Scatter(
         x=hist_plot["data"],
         y=hist_plot["valor_pago"] / escala,
         mode="lines+markers",
-        line=dict(color="#2E86C1", width=2),
-        marker=dict(size=4),
+        line=dict(color=C["resultado"], width=2),
+        marker=dict(size=4, color=C["resultado"]),
         name="Pago (histórico)",
         hovertemplate="%{x|%m/%Y}: %{y:.2f}<extra></extra>",
     ))
 
-    # Linha de previsão — começa no último ponto histórico para continuar a curva
+    # Linha de previsao
     ultimo_hist = hist_plot.iloc[-1]
     x_prev = [ultimo_hist["data"]] + prev["data"].tolist()
     y_prev = [ultimo_hist["valor_pago"] / escala] + (prev["previsao_pago"] / escala).tolist()
     fig.add_trace(go.Scatter(
         x=x_prev, y=y_prev,
         mode="lines+markers",
-        line=dict(color="#E67E22", width=2, dash="dash"),
-        marker=dict(size=6, symbol="diamond"),
+        line=dict(color=C["warning"], width=2, dash="dash"),
+        marker=dict(size=6, symbol="diamond", color=C["warning"]),
         name="Previsão",
         hovertemplate="%{x|%m/%Y}: %{y:.2f}<extra></extra>",
     ))
 
-    # Linha vertical marcando fim dos dados reais
     fig.add_vline(
         x=ultima_data.timestamp() * 1000,
-        line_dash="dot", line_color="#888", opacity=0.6,
+        line_dash="dot", line_color="rgba(255,255,255,0.2)", opacity=0.8,
         annotation_text="último dado real",
         annotation_position="top right",
         annotation_font_size=11,
+        annotation_font_color=C["text_muted"],
     )
 
     fig.update_layout(
-        height=460,
-        font=dict(size=13),
         yaxis_title=unidade,
         legend=dict(
             orientation="h", yanchor="top", y=-0.22,
             xanchor="center", x=0.5, title="",
+            font=dict(size=12, color=C["text"]),
+            bgcolor="rgba(13,27,46,0.9)",
+            bordercolor=C["border"], borderwidth=1,
         ),
-        margin=dict(l=10, r=10, t=30, b=10),
         xaxis=dict(
             tickformat="%m/%Y",
-            tickfont=dict(size=12),
-            rangeslider=dict(visible=True, thickness=0.06),
-            rangeselector=dict(buttons=[
+            rangeslider=dict(**_RSLD),
+            rangeselector=dict(**_RSEL, buttons=[
                 dict(count=1,  label="1a",  step="year", stepmode="backward"),
                 dict(count=2,  label="2a",  step="year", stepmode="backward"),
-                dict(step="all", label="Max"),
+                dict(step="all", label="Máx"),
             ]),
         ),
-        yaxis=dict(tickfont=dict(size=12)),
     )
+    _plotly_dark(fig, height=460, margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── Métricas de contexto ─────────────────────────────────────────────
+    # Metricas de contexto
     ratio    = float(prev["ratio_rolling"].iloc[0])
     n_hist   = int(prev["n_meses_historico"].iloc[0])
     variacao = (ratio - 1) * 100
@@ -831,12 +1508,16 @@ def aba_previsao(dados):
         f"R$ {_fmt(prev['previsao_pago'].sum() / escala, 1)} {'bi' if escala == 1e9 else 'mi'}",
     )
 
-    # ── Tabela de previsões ──────────────────────────────────────────────
-    st.markdown("**Previsões mensais detalhadas**")
+    # Tabela de previsoes
+    st.markdown(
+        f"<div style='font-size:12px; font-weight:600; color:{C['text']}; margin:12px 0 6px;'>"
+        "Previsões mensais detalhadas</div>",
+        unsafe_allow_html=True,
+    )
     tbl = prev[["ano", "mes", "previsao_pago", "previsao_ic_baixo", "previsao_ic_alto"]].copy()
     sufixo = "bi" if escala == 1e9 else "mi"
-    tbl["Período"]     = tbl["mes"].map(MES_LABELS) + "/" + tbl["ano"].astype(str)
-    tbl["Previsão"]    = tbl["previsao_pago"].apply(
+    tbl["Período"]        = tbl["mes"].map(MES_LABELS) + "/" + tbl["ano"].astype(str)
+    tbl["Previsão"]       = tbl["previsao_pago"].apply(
         lambda v: f"R$ {_fmt(v / escala, 1)} {sufixo}"
     )
     tbl["IC Baixo (p25)"] = tbl["previsao_ic_baixo"].apply(
@@ -861,18 +1542,12 @@ def aba_previsao(dados):
 # -- App principal ---------------------------------------------------------
 
 def main():
-    st.title("📊 Gastômetro FIESP")
-    st.caption(
-        "Monitoramento de resultados fiscais do Governo Federal  ·  "
-        "Secretaria do Tesouro Nacional"
-    )
-
     dados  = carregar_dados()
     df_rtn = dados.get("rtn", pd.DataFrame())
 
     if df_rtn.empty:
         st.error(
-            "Dados RTN nao encontrados. "
+            "Dados RTN não encontrados. "
             "Execute `python pipelines/rtn/load.py` para baixar."
         )
         st.stop()
@@ -881,7 +1556,77 @@ def main():
     if not filtros:
         st.stop()
 
-    # Seletor de metrica compartilhado entre todas as abas
+    logo_b64 = _logo_b64()
+
+    # Logo na barra superior (CSS data URI)
+    if logo_b64:
+        st.markdown(f"""
+        <style>
+        [data-testid="stHeader"]::after {{
+            content: '';
+            position: absolute;
+            right: 180px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 90px;
+            height: 34px;
+            background: url("{logo_b64}") no-repeat center/contain;
+            display: block;
+        }}
+        </style>
+        """, unsafe_allow_html=True)
+
+    # Logo no header principal (base64 inline)
+    logo_img = (
+        f'<img src="{logo_b64}" '
+        f'height="54" style="border-radius:5px; margin-right:20px; flex-shrink:0;" alt="FIESP"/>'
+        if logo_b64 else ""
+    )
+
+    # Header principal
+    periodo_ref = f"{MES_LABELS.get(filtros['mes'], '')}/{filtros['ano']}"
+    st.markdown(f"""
+    <div style="
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 28px;
+        background: linear-gradient(135deg, {C['bg2']} 0%, {C['bg3']} 100%);
+        border: 1px solid {C['border']};
+        border-radius: 12px;
+        margin-bottom: 20px;
+        margin-top: 0;
+    ">
+      <div style="flex-shrink:0;">
+        {logo_img}
+      </div>
+      <div style="flex:1; text-align:center; padding:0 24px;">
+        <div style="font-size:12px; letter-spacing:3px; color:{C['accent']};
+                    font-weight:700; text-transform:uppercase; margin-bottom:8px;">
+          GESTÃO DE PROJETOS ESPECIAIS
+        </div>
+        <div style="font-size:42px; font-weight:700; color:{C['text']};
+                    letter-spacing:-0.5px; line-height:1.1;">
+          Gastômetro FIESP
+        </div>
+        <div style="font-size:16px; color:{C['text_dim']}; margin-top:6px;">
+          Monitoramento dos gastos do Governo Federal
+        </div>
+      </div>
+      <div style="text-align:right; flex-shrink:0;">
+        <div style="font-size:9px; color:{C['text_muted']}; text-transform:uppercase;
+                    letter-spacing:1.5px; margin-bottom:6px;">Referência</div>
+        <div style="font-size:22px; font-weight:700; color:{C['accent']};">
+          {periodo_ref}
+        </div>
+        <div style="font-size:10px; color:{C['text_muted']}; margin-top:4px;">
+          Tesouro Nacional · RTN
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Seletor de metrica
     meta_path = DATA_DIR / "rtn" / "metadata.json"
     base_label = "base IPCA"
     if meta_path.exists():
@@ -894,20 +1639,23 @@ def main():
         "% do PIB":                            "pct_pib",
     }
     opcao_sel = st.radio(
-        "Metrica", list(OPCOES.keys()),
+        "Métrica", list(OPCOES.keys()),
         horizontal=True, label_visibility="collapsed",
     )
     col_val = OPCOES[opcao_sel]
     is_pib  = col_val == "pct_pib"
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "💸 Gastos do Governo Federal",
         "📊 Resultado Fiscal",
         "🚨 Alertas",
-        "🔎 Vigilancia Fiscal",
+        "🔎 Vigilância Fiscal",
         "📋 Explorador",
         "🔮 Previsão de Gastos",
     ])
 
+    with tab0:
+        aba_gastos_governo(dados, filtros, col_val, is_pib)
     with tab1:
         aba_resultado_fiscal(dados, filtros, col_val, is_pib, opcao_sel)
     with tab2:
@@ -919,17 +1667,25 @@ def main():
     with tab5:
         aba_previsao(dados)
 
-    st.markdown("---")
-    st.caption(
-        "Fonte: RTN · Secretaria do Tesouro Nacional · "
-        "Atualizacao: `python pipelines/rtn/load.py`"
-    )
-
-
-# -- Funcoes legadas (Portal da Transparencia) -- temporariamente desabilitadas
-# Reativar quando os endpoints forem liberados. Ver diagnostico_api_endpoints.xlsx.
-# As funcoes aba_visao_geral, aba_alertas, aba_vigilancia, aba_explorador foram
-# removidas desta versao. Recuperar do historico de sessao se necessario.
+    # Footer
+    st.markdown(f"""
+    <div style="
+        margin-top: 32px;
+        padding: 16px 20px;
+        border-top: 1px solid {C['border']};
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    ">
+      <div style="font-size:11px; color:{C['text_muted']};">
+        <span style="color:{C['accent']}; font-weight:600;">Fonte:</span>
+        RTN · Secretaria do Tesouro Nacional
+      </div>
+      <div style="font-size:10px; color:{C['text_muted']}; letter-spacing:1px; text-transform:uppercase;">
+        Assessoria Econômica · FIESP
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
