@@ -264,6 +264,15 @@ p {{ color: {C['text_dim']}; }}
 /* Dividers */
 hr {{ border-color: {C['border']} !important; opacity: 0.5; }}
 
+/* Botão de reabrir a sidebar (fica oculto com o header escondido sem este fix) */
+[data-testid="collapsedControl"] {{
+    display: flex !important;
+    background-color: {C['bg2']} !important;
+    border-right: 1px solid {C['border']} !important;
+    border-radius: 0 6px 6px 0 !important;
+    color: {C['accent']} !important;
+}}
+
 /* Alertas */
 .alerta-vermelho {{
     background: linear-gradient(90deg, rgba(239,68,68,0.08) 0%, rgba(13,27,46,0.5) 100%);
