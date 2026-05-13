@@ -1,10 +1,26 @@
 """
-dashboard/app.py  --  Frontend Streamlit
------------------------------------------
-Painel de acompanhamento fiscal com dados do Tesouro Nacional (RTN).
-Le exclusivamente da camada gold (Parquet).
+dashboard/app.py  —  O Painel: Gastômetro FIESP
+─────────────────────────────────────────────────────────────────────────
+Este é o arquivo principal do painel. Ele cria toda a interface visual
+que aparece no navegador quando você roda o Gastômetro.
 
-Executar:
+O que este arquivo faz:
+  - Lê os dados processados (arquivos .parquet e .json) da pasta data/
+  - Monta 4 abas interativas com gráficos e tabelas
+  - Aplica o tema visual dark da FIESP (cores, fontes, layout)
+  - Exibe um contador em tempo real de gastos do Governo Federal
+
+As 4 abas do painel:
+  💸 Gastos do Governo Federal — despesas do mês e acumulado 12 meses
+  🔭 Observatório Fiscal       — receita × despesa × resultado primário
+  🚨 Alertas                   — detecção automática de anomalias (z-score)
+  📋 Explorador                — qualquer série histórica da RTN com download
+
+Fonte de dados:
+  Todos os dados vêm do Tesouro Nacional (RTN — Resultado do Tesouro
+  Nacional), processados pelo pipeline em pipelines/rtn/load.py.
+
+Como executar:
   streamlit run dashboard/app.py
 """
 
@@ -22,9 +38,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config.settings import DATA_DIR, ORGAOS_ALTA_VIGILANCIA, RUBRICAS_ALTA_VIGILANCIA
+from config.settings import DATA_DIR
 
-GOLD_DIR  = DATA_DIR / "despesas" / "gold"
+# Caminho para o logo da FIESP (exibido no cabeçalho e na sidebar)
 LOGO_PATH = Path(__file__).parent / "assets" / "fiesp-logo.jpg"
 
 
@@ -39,12 +55,17 @@ def _logo_b64() -> str:
     data = LOGO_PATH.read_bytes()
     return "data:image/jpeg;base64," + base64.b64encode(data).decode()
 
+# Dicionário que mapeia número do mês para abreviação em português.
+# Usado em labels de gráficos e na sidebar.
 MES_LABELS = {
     1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
     7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
 }
 
-# Paleta de cores
+# Paleta de cores do tema dark da FIESP.
+# Todas as cores do painel estão centralizadas aqui — se quiser mudar
+# alguma cor, basta alterar o valor correspondente neste dicionário.
+# As cores são códigos hexadecimais CSS (ex: "#050B18" = azul quase preto).
 C = {
     "bg":         "#050B18",
     "bg2":        "#0D1B2E",
@@ -64,7 +85,10 @@ C = {
     "nominal":    "#A78BFA",
 }
 
-# Constantes de estilo Plotly reutilizaveis
+# Constantes de estilo para os seletores de período dos gráficos Plotly.
+# _RSEL = estilo do rangeselector (botões "1a", "3a", "5a", "Máx")
+# _RSLD = estilo do rangeslider (a barra de navegação abaixo do gráfico)
+# Definidas aqui uma vez para evitar repetição nos vários gráficos.
 _RSEL = dict(
     bgcolor=C["bg3"],
     bordercolor=C["border"],
@@ -76,12 +100,27 @@ _RSLD = dict(bgcolor=C["bg2"], bordercolor=C["border"], thickness=0.06)
 
 
 def _fmt(valor: float, decimais: int = 2) -> str:
+    """
+    Formata um número no padrão brasileiro: ponto como separador de milhar
+    e vírgula como separador decimal.
+    Exemplo: _fmt(1234567.89) → "1.234.567,89"
+
+    A lógica de troca de caracteres:
+      1. Python usa vírgula para milhar e ponto para decimal: "1,234,567.89"
+      2. Troca vírgulas por "X" (marcador temporário): "1X234X567.89"
+      3. Troca ponto por vírgula (decimal BR): "1X234X567,89"
+      4. Troca "X" por ponto (milhar BR): "1.234.567,89"
+    """
     s = f"{valor:,.{decimais}f}"
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _plotly_dark(fig, height=420, margin=None):
-    """Aplica tema escuro padrao a qualquer figura Plotly."""
+    """
+    Aplica o tema visual dark da FIESP a qualquer figura Plotly.
+    Chamada em todos os gráficos para garantir consistência visual.
+    Ajusta fundo, cores de grade, fontes e tamanho da figura.
+    """
     if margin is None:
         margin = dict(l=10, r=10, t=30, b=10)
     fig.update_layout(
@@ -115,7 +154,9 @@ def _plotly_dark(fig, height=420, margin=None):
     return fig
 
 
-# -- Configuracao da pagina ------------------------------------------------
+# ── Configuração da página ────────────────────────────────────────────────
+# st.set_page_config() DEVE ser a primeira chamada Streamlit do script.
+# Define título da aba do navegador, ícone e layout da página.
 st.set_page_config(
     page_title="Gastômetro FIESP",
     page_icon="📊",
@@ -123,6 +164,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Bloco de CSS customizado injetado diretamente na página.
+# O Streamlit permite isso via st.markdown com unsafe_allow_html=True.
+# Aqui definimos fontes, cores de fundo, estilos das abas, cards, alertas, etc.
+# O "f" antes das aspas permite usar as variáveis do dicionário C{} dentro do CSS.
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -284,19 +329,26 @@ hr {{ border-color: {C['border']} !important; opacity: 0.5; }}
 
 @st.cache_data(ttl=3600, show_spinner="Carregando dados...")
 def carregar_dados():
-    dados = {}
-    arquivos = {
-        "orgao":             GOLD_DIR / "despesas_mensal_orgao.parquet",
-        "natureza":          GOLD_DIR / "despesas_mensal_natureza.parquet",
-        "vigilancia":        GOLD_DIR / "despesas_vigilancia.parquet",
-        "anomalias":         GOLD_DIR / "anomalias.parquet",
-        "rtn":               DATA_DIR / "rtn" / "rtn_mensal.parquet",
-        "previsao_orgao":    GOLD_DIR / "previsao_mensal_orgao.parquet",
-        "previsao_natureza": GOLD_DIR / "previsao_mensal_natureza.parquet",
-    }
-    for nome, caminho in arquivos.items():
-        dados[nome] = pd.read_parquet(caminho) if caminho.exists() else pd.DataFrame()
+    """
+    Lê os arquivos de dados e devolve um dicionário para o painel.
 
+    O decorator @st.cache_data faz com que o Streamlit guarde o resultado
+    em memória por 1 hora (ttl=3600 segundos). Assim, o arquivo não é
+    relido a cada interação do usuário — só quando os dados ficam "velhos".
+
+    Retorna um dicionário com duas chaves:
+      "rtn"      → DataFrame com toda a série histórica do Tesouro Nacional
+      "contador" → dicionário com a taxa de gastos por segundo (para o contador)
+    """
+    dados = {}
+
+    # Lê o parquet da RTN (Resultado do Tesouro Nacional).
+    # Parquet é um formato de arquivo colunar muito mais eficiente que CSV
+    # para leitura — ocupa menos espaço e carrega mais rápido.
+    rtn_path = DATA_DIR / "rtn" / "rtn_mensal.parquet"
+    dados["rtn"] = pd.read_parquet(rtn_path) if rtn_path.exists() else pd.DataFrame()
+
+    # Lê o JSON do contador fiscal (taxa de gasto por segundo)
     cont_path = DATA_DIR / "contador_fiscal.json"
     dados["contador"] = (
         json.loads(cont_path.read_text(encoding="utf-8")) if cont_path.exists() else {}
@@ -304,9 +356,16 @@ def carregar_dados():
     return dados
 
 
-# -- Sidebar ---------------------------------------------------------------
+# ── Sidebar (painel lateral) ──────────────────────────────────────────────
 
 def sidebar_filtros(df_rtn: pd.DataFrame) -> dict:
+    """
+    Monta a barra lateral do painel com os filtros de ano/mês e os toggles
+    de alerta. Retorna um dicionário com as seleções do usuário.
+
+    O Streamlit re-executa todo o script a cada interação — quando o usuário
+    muda o ano ou o mês, o script roda do início com os novos filtros.
+    """
     if _logo_existe():
         st.sidebar.image(str(LOGO_PATH), width=140)
     st.sidebar.markdown(f"""
@@ -365,13 +424,17 @@ def sidebar_filtros(df_rtn: pd.DataFrame) -> dict:
     }
 
 
-# -- Helpers RTN -----------------------------------------------------------
+# ── Funções auxiliares para consultar a RTN ───────────────────────────────
+# Estas funções evitam repetição de código ao buscar valores na série RTN.
+# Todas recebem o DataFrame completo e filtram internamente.
 
 def _rtn_serie(df_rtn: pd.DataFrame, prefixo: str) -> pd.DataFrame:
+    """Filtra o DataFrame da RTN pelas linhas cujo indicador começa com 'prefixo'."""
     return df_rtn[df_rtn["discriminacao"].str.startswith(prefixo)]
 
 
 def _rtn_valor(df_rtn, prefixo, a, m, col):
+    """Retorna o valor de um indicador em um mês/ano específico. None se não encontrado."""
     sub = _rtn_serie(df_rtn, prefixo)
     row = sub[(sub["ano"] == a) & (sub["mes"] == m)][col]
     return float(row.iloc[0]) if len(row) == 1 else None
@@ -379,9 +442,16 @@ def _rtn_valor(df_rtn, prefixo, a, m, col):
 
 def _rtn_soma_12m(df_rtn, prefixo, a, m, col):
     """
-    Soma (ou media, para pct_pib) dos 12 meses terminando em (a, m) inclusive.
-    Para pct_pib retorna a media porque cada valor ja e uma taxa anualizada;
-    a media dos 12 meses equivale ao total anual / PIB * 100.
+    Retorna a soma (ou média, para % do PIB) dos 12 meses terminando em (a, m) inclusive.
+
+    Para que serve: calcular o "acumulado 12 meses", que é o padrão para
+    comparar desempenho fiscal sem distorção de sazonalidade.
+
+    Para % do PIB retorna a MÉDIA porque cada valor já é uma taxa anualizada;
+    a média dos 12 meses equivale ao total anual / PIB × 100.
+    Para valores em R$, retorna a SOMA dos 12 meses.
+
+    Retorna None se houver menos de 6 meses com dados (insuficiente para ser representativo).
     """
     sub = _rtn_serie(df_rtn, prefixo)
     m_ini = m + 1
@@ -400,7 +470,12 @@ def _rtn_soma_12m(df_rtn, prefixo, a, m, col):
 
 
 def _rtn_delta(df_rtn, prefixo, a, m, col, fn=None):
-    """Variacao percentual m/m usando fn para calcular o valor (pontual ou acumulado)."""
+    """
+    Calcula a variação percentual mês a mês (m/m).
+    Se 'fn' for fornecida, usa essa função para calcular o valor (ex: soma 12m).
+    Sem 'fn', usa o valor pontual do mês.
+    Retorna None se não houver dados suficientes.
+    """
     if fn is None:
         fn = lambda p, aa, mm: _rtn_valor(df_rtn, p, aa, mm, col)
     atual = fn(prefixo, a, m)
@@ -412,6 +487,13 @@ def _rtn_delta(df_rtn, prefixo, a, m, col, fn=None):
 
 
 def _fmt_rtn(v, is_pib: bool):
+    """
+    Formata um valor da RTN para exibição no painel.
+    - Se is_pib=True: formata como porcentagem (ex: "2,3%")
+    - Se is_pib=False: formata como R$ bilhões (ex: "R$ 1.234,5 bi")
+      (a RTN armazena em R$ milhões, então divide por 1.000 para obter bilhões)
+    - Retorna "—" para valores nulos.
+    """
     if v is None:
         return "—"
     sinal = "−" if v < 0 else ""
@@ -420,8 +502,20 @@ def _fmt_rtn(v, is_pib: bool):
     return f"R$ {sinal}{_fmt(abs(v) / 1e3, 1)} bi"
 
 
-# -- Constantes de negocio -------------------------------------------------
+# ── Constantes de negócio ─────────────────────────────────────────────────
+# Estas listas definem QUAIS séries da RTN aparecem em cada parte do painel.
+# Os prefixos (ex: "3. ", "4. ") correspondem à numeração oficial da RTN:
+#   1.  = Receita Total
+#   3.  = Receita Líquida (após transferências por repartição)
+#   4.  = Despesa Total
+#   4.1 = Benefícios Previdenciários
+#   4.2 = Pessoal e Encargos Sociais
+#   4.3 = Outras Despesas Obrigatórias
+#   4.4.2 = Despesas Discricionárias
+#   5.  = Resultado Primário (Receita Líquida - Despesa Total)
+#   10. = Resultado Nominal (Primário + Juros)
 
+# KPIs principais do Observatório Fiscal (4 cards no topo)
 KPIS_RTN = [
     ("3. ",  "Receita Líquida",    "Receita Total menos Transferências por Repartição."),
     ("4. ",  "Despesa Total",      "Previdência + Pessoal + Obrigatórias + Discricionárias."),
@@ -429,6 +523,7 @@ KPIS_RTN = [
     ("10.", "Result. Nominal",    "Resultado Primário + Juros Nominais. Negativo = déficit."),
 ]
 
+# Categorias de despesa para o gráfico de composição (barras horizontais)
 COMP_DESPESA = [
     ("4.1 ",   "Benef. Previdenciários"),
     ("4.2 ",   "Pessoal e Encargos Sociais"),
@@ -437,7 +532,9 @@ COMP_DESPESA = [
     ("4.4.2",  "Despesas Discricionárias"),
 ]
 
-# Rubricas detalhadas exclusivas para o gráfico "Rubricas (top 5)"
+# Rubricas detalhadas (subitens de 4.3 e 4.4.1) para o gráfico "Rubricas (top 5)"
+# São os itens mais granulares da RTN dentro de Outras Obrigatórias e
+# Obrigatórias com Controle de Fluxo — permite identificar o que mais pesou
 RUBRICAS_DESP = [
     "4.3.01", "4.3.02", "4.3.03", "4.3.04", "4.3.05",
     "4.3.06", "4.3.07", "4.3.08", "4.3.09", "4.3.10",
@@ -446,6 +543,7 @@ RUBRICAS_DESP = [
     "4.4.1.1", "4.4.1.2", "4.4.1.3", "4.4.1.4",
 ]
 
+# Séries monitoradas pela aba de Alertas (detecção de anomalias via z-score)
 SERIES_ALERTA = [
     ("3. ",   "Receita Líquida"),
     ("4. ",   "Despesa Total"),
@@ -543,9 +641,19 @@ def _render_comp_rtn(fn_valor, is_pib, titulo):
 
 def _folhas_rtn(df_rtn: pd.DataFrame) -> list:
     """
-    Retorna as discriminações 'folha' de despesa (4.xx) da RTN:
-    itens mais granulares disponíveis, excluindo totais e sub-totais.
-    Uma série é folha se nenhuma outra série tem seu código como prefixo.
+    Identifica as séries "folha" da RTN — os itens mais granulares
+    disponíveis dentro das despesas (séries que começam com "4.").
+
+    Em uma hierarquia como:
+       4. Despesa Total
+         4.1 Benefícios Previdenciários
+         4.3 Outras Obrigatórias
+           4.3.01 LOAS/RMV
+           4.3.02 Abono Salarial
+
+    As "folhas" são os itens que não têm subitens (ex: 4.3.01, 4.3.02).
+    O total (4.) e os grupos (4.1, 4.3) são excluídos porque somá-los
+    ao lado de suas subdivisões geraria dupla contagem.
     """
     series_desp = [s for s in df_rtn["discriminacao"].unique() if s.startswith("4.")]
 
@@ -643,7 +751,15 @@ def _render_top_n_rtn(
 
 
 def _calcular_base_contador(df_rtn: pd.DataFrame, contador: dict) -> float:
-    """Soma real (R$) dos meses anteriores ao mês projetado pelo contador."""
+    """
+    Calcula o acumulado real de despesas do ano até o mês anterior ao projetado.
+
+    O contador exibe: gastos já realizados (dados reais da RTN) + gasto estimado
+    do mês atual (em andamento). Esta função calcula a parcela "já realizada".
+
+    Exemplo: se o contador está prevendo junho/2025, esta função soma
+    janeiro a maio/2025 com dados reais da RTN.
+    """
     mes_ref = contador.get("mes_referencia", "")
     if not mes_ref:
         return 0.0
@@ -659,11 +775,34 @@ def _contador_html(
     taxa_rs: float,
     start_ms: int,
     mes_ref: str,
+    mes_ref_fim: str,
     ultimo_dado: str,
 ) -> str:
-    ano_ref = mes_ref[:4]
-    mes_ref_fmt  = mes_ref[5:7] + "/" + mes_ref[:4]
+    """
+    Gera o HTML+JavaScript do contador em tempo real.
+
+    Como funciona:
+      - acc_base_rs: total acumulado nos meses com dado real (R$)
+      - taxa_rs: R$ por segundo — taxa média sobre 2 meses projetados
+      - start_ms: timestamp Unix em milissegundos do início do 1º mês projetado
+
+    O JavaScript calcula:
+      total = acc_base + (segundos_desde_início_de_T+1 × taxa)
+
+    E atualiza o display a cada 100ms (10 vezes por segundo),
+    criando a ilusão de um contador contínuo.
+    A taxa cobre T+1 e T+2, então o contador corre sem interrupção até o fim de T+2.
+    """
+    ano_ref      = mes_ref[:4]
+    mes_ini_fmt  = mes_ref[5:7] + "/" + mes_ref[:4]
+    mes_fim_fmt  = mes_ref_fim[5:7] + "/" + mes_ref_fim[:4]
     ult_fmt      = ultimo_dado[5:7] + "/" + ultimo_dado[:4]
+    # Exibe "Abr–Mai/2026" quando os dois meses são do mesmo ano,
+    # ou "Dez/2025–Jan/2026" quando cruzam a virada de ano.
+    if mes_ref[:4] == mes_ref_fim[:4]:
+        intervalo_fmt = f"{mes_ref[5:7]}–{mes_fim_fmt}"
+    else:
+        intervalo_fmt = f"{mes_ini_fmt}–{mes_fim_fmt}"
     return f"""
 <div style="
     background: linear-gradient(135deg, {C['bg']} 0%, {C['bg3']} 100%);
@@ -685,7 +824,7 @@ def _contador_html(
         calculando...
     </div>
     <div style="font-size:10px; color:{C['text_muted']}; margin-top:6px; opacity:0.6;">
-        Dados reais até {ult_fmt} · Projeção {mes_ref_fmt} pela fórmula ratio rolling 12m
+        Dados reais até {ult_fmt} · Projeção {intervalo_fmt} pela fórmula ratio rolling 12m
         · R$&nbsp;{taxa_rs:,.0f}/s
     </div>
 </div>
@@ -719,11 +858,21 @@ def _contador_html(
 """
 
 
-# -- Aba 0: Gastos do Governo Federal --------------------------------------
+# ── Aba 0: Gastos do Governo Federal ─────────────────────────────────────
 
 def aba_gastos_governo(dados, filtros, col_val, is_pib):
-    df_rtn = dados.get("rtn", pd.DataFrame())
-    df_nat = dados.get("natureza", pd.DataFrame())
+    """
+    Renderiza a aba "💸 Gastos do Governo Federal".
+
+    Conteúdo:
+      - Contador em tempo real (HTML+JS)
+      - Card com Despesa Total do mês selecionado
+      - Gráfico de composição por categoria (Previdência, Pessoal, etc.)
+      - Gráfico Top 5 rubricas mais pesadas
+      - Repetição para acumulado 12 meses
+      - Explorador de séries de despesa com download CSV
+    """
+    df_rtn   = dados.get("rtn", pd.DataFrame())
     contador = dados.get("contador", {})
 
     if df_rtn.empty:
@@ -734,17 +883,18 @@ def aba_gastos_governo(dados, filtros, col_val, is_pib):
 
     # ── Contador em tempo real ─────────────────────────────────────────────
     if contador:
-        mes_ref  = contador.get("mes_referencia", "")
-        ano_prev = int(mes_ref[:4])
-        mes_prev = int(mes_ref[5:7])
-        start_dt = datetime(ano_prev, mes_prev, 1, 0, 0, 0, tzinfo=timezone.utc)
-        start_ms = int(start_dt.timestamp() * 1000)
+        mes_ref     = contador.get("mes_referencia", "")
+        mes_ref_fim = contador.get("mes_referencia_fim", mes_ref)
+        ano_prev    = int(mes_ref[:4])
+        mes_prev    = int(mes_ref[5:7])
+        start_dt    = datetime(ano_prev, mes_prev, 1, 0, 0, 0, tzinfo=timezone.utc)
+        start_ms    = int(start_dt.timestamp() * 1000)
         acc_base_rs = _calcular_base_contador(df_rtn, contador)
         taxa_rs     = contador.get("taxa_por_segundo_rs", 0.0)
         ultimo_dado = contador.get("ultimo_dado_rtn", "")
 
         st.components.v1.html(
-            _contador_html(acc_base_rs, taxa_rs, start_ms, mes_ref, ultimo_dado),
+            _contador_html(acc_base_rs, taxa_rs, start_ms, mes_ref, mes_ref_fim, ultimo_dado),
             height=168,
         )
     else:
@@ -890,9 +1040,20 @@ def aba_gastos_governo(dados, filtros, col_val, is_pib):
     )
 
 
-# -- Aba 1: Observatório Fiscal --------------------------------------------
+# ── Aba 1: Observatório Fiscal ────────────────────────────────────────────
 
 def aba_observatorio_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
+    """
+    Renderiza a aba "🔭 Observatório Fiscal".
+
+    Conteúdo:
+      - 4 KPIs do mês: Receita Líquida, Despesa Total, Resultado Primário, Resultado Nominal
+      - Os mesmos 4 KPIs no acumulado 12 meses
+      - Gráfico de linha: Receita × Despesa × Resultado Primário
+      - Gráfico de área: Trajetória do Resultado Primário acumulado 12 meses
+      - Gráfico de barras: Resultado Primário acumulado no ano
+      - Tabela comparativa com variações anuais
+    """
     df = dados.get("rtn", pd.DataFrame())
     if df.empty:
         st.info("Execute `python pipelines/rtn/load.py` para baixar os dados.")
@@ -1132,9 +1293,24 @@ def aba_observatorio_fiscal(dados, filtros, col_val, is_pib, opcao_sel):
     )
 
 
-# -- Aba 2: Alertas (RTN) --------------------------------------------------
+# ── Aba 2: Alertas ────────────────────────────────────────────────────────
 
 def aba_alertas_rtn(dados, filtros, col_val, is_pib):
+    """
+    Renderiza a aba "🚨 Alertas".
+
+    Detecta valores estatisticamente anômalos usando z-score:
+      z = (valor_do_mês - média_24m_anteriores) / desvio_padrão_24m_anteriores
+
+    Interpretação do z-score:
+      |z| ≥ 3,0σ → ALERTA VERMELHO (evento muito raro, < 0,3% de probabilidade)
+      |z| ≥ 2,0σ → ALERTA AMARELO  (evento incomum, < 5% de probabilidade)
+
+    O .shift(1) garante que o mês atual não entra no cálculo da sua própria
+    média histórica (o que seria "trapacear" — data leakage).
+
+    O usuário pode filtrar alertas por nível via sidebar.
+    """
     df = dados.get("rtn", pd.DataFrame())
     if df.empty:
         st.info("Dados RTN não encontrados.")
@@ -1206,9 +1382,19 @@ def aba_alertas_rtn(dados, filtros, col_val, is_pib):
         )
 
 
-# -- Aba 3: Explorador de series RTN ---------------------------------------
+# ── Aba 3: Explorador de séries RTN ──────────────────────────────────────
 
 def aba_explorador_rtn(dados, filtros, col_val, is_pib, opcao_sel):
+    """
+    Renderiza a aba "📋 Explorador".
+
+    Permite que o usuário selecione qualquer série disponível na RTN
+    (receitas, despesas, resultado, etc.) e veja o histórico completo
+    em gráfico interativo com botões de período (1a, 3a, 5a, Máx).
+
+    Também exibe tabela com os últimos 24 meses e botão de download CSV.
+    Útil para análises ad-hoc e exportação de dados para Excel.
+    """
     df = dados.get("rtn", pd.DataFrame())
     if df.empty:
         st.info("Dados RTN não encontrados.")
@@ -1280,9 +1466,22 @@ def aba_explorador_rtn(dados, filtros, col_val, is_pib, opcao_sel):
 
 
 
-# -- App principal ---------------------------------------------------------
+# ── Ponto de entrada principal ────────────────────────────────────────────
 
 def main():
+    """
+    Orquestra a montagem completa do painel:
+      1. Carrega os dados (com cache de 1 hora)
+      2. Verifica se os dados existem — exibe erro amigável se não
+      3. Monta a sidebar com filtros
+      4. Exibe o cabeçalho principal com logo e título
+      5. Renderiza o seletor de métrica (nominal / real / % PIB)
+      6. Chama cada função de aba
+      7. Exibe o rodapé com a fonte dos dados
+
+    O Streamlit executa esta função do início ao fim a cada interação
+    do usuário — é diferente de uma aplicação web tradicional.
+    """
     dados  = carregar_dados()
     df_rtn = dados.get("rtn", pd.DataFrame())
 
@@ -1349,7 +1548,10 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Seletor de metrica
+    # Seletor de métrica: permite alternar entre três formas de ver os dados.
+    # - Nominal (R$ correntes): o valor em reais do período, sem ajuste
+    # - Real (R$ constantes): ajustado pelo IPCA, elimina efeito da inflação
+    # - % do PIB: proporção do PIB, permite comparação entre anos e países
     meta_path = DATA_DIR / "rtn" / "metadata.json"
     base_label = "base IPCA"
     if meta_path.exists():
@@ -1365,8 +1567,8 @@ def main():
         "Métrica", list(OPCOES.keys()),
         horizontal=True, label_visibility="collapsed",
     )
-    col_val = OPCOES[opcao_sel]
-    is_pib  = col_val == "pct_pib"
+    col_val = OPCOES[opcao_sel]           # nome da coluna a usar nos gráficos
+    is_pib  = col_val == "pct_pib"        # flag usada para formatar os valores
 
     tab0, tab1, tab2, tab3 = st.tabs([
         "💸 Gastos do Governo Federal",

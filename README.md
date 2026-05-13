@@ -1,6 +1,6 @@
-# Radar Fiscal FIESP
-Monitoramento automatizado de gastos do Governo Federal.
-Fonte primária: Portal da Transparência (CGU).
+# Gastômetro FIESP
+Painel de monitoramento dos gastos do Governo Federal.
+Fonte: Secretaria do Tesouro Nacional — RTN (Resultado do Tesouro Nacional).
 
 ---
 
@@ -8,110 +8,119 @@ Fonte primária: Portal da Transparência (CGU).
 
 ```
 acompanhamento_fiscal/
-├── atualizar_dados.py          ← O Gerente (orquestra o pipeline)
-├── requirements.txt
-├── .env                        ← Crie este arquivo com sua chave de API
+├── atualizar_dados.py          ← roda tudo com um comando
+├── requirements.txt            ← dependências Python
 │
 ├── config/
-│   └── settings.py             ← Configurações centrais, thresholds, rubricas
+│   └── settings.py             ← configurações centrais (diretórios)
 │
-├── data/                       ← O Almoxarifado (não commitar no git)
-│   └── despesas/
-│       ├── raw/                ← JSON bruto da API (nunca modificar)
-│       ├── silver/             ← Parquet limpo, granularidade de empenho
-│       └── gold/               ← Parquet agregado, pronto para o dashboard
+├── data/                       ← dados processados (não commitar no git)
+│   ├── contador_fiscal.json    ← taxa de gasto por segundo (gerado automaticamente)
+│   └── rtn/
+│       ├── rtn_mensal.parquet  ← série histórica do Tesouro (gerado automaticamente)
+│       └── metadata.json       ← período-base do deflator IPCA
 │
-├── pipelines/                  ← A Fábrica
-│   └── despesas/
-│       ├── extract.py          ← Operário 1: Coleta
-│       ├── silver.py           ← Operário 2: Padronização
-│       └── gold.py             ← Operário 3: Regras de negócio + alertas
+├── pipelines/
+│   ├── contador_fiscal.py      ← calcula a taxa de R$/segundo para o contador
+│   └── rtn/
+│       └── load.py             ← baixa e processa o Excel da RTN
 │
 ├── dashboard/
-│   └── app.py                  ← Frontend Streamlit
+│   ├── app.py                  ← o painel (Streamlit)
+│   └── assets/
+│       └── fiesp-logo.jpg
 │
-└── logs/                       ← Gerado automaticamente
-    └── pipeline.log
+└── logs/
+    └── pipeline.log            ← gerado automaticamente
 ```
 
 ---
 
-## Configuração inicial
+## Como usar
 
 ### 1. Instalar dependências
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate     # Windows
+.venv\Scripts\activate      # Windows
+# source .venv/bin/activate  # Linux/Mac
 
 pip install -r requirements.txt
 ```
 
-### 2. Obter chave de API
-Cadastre-se em https://portaldatransparencia.gov.br/api-de-dados/cadastrar
-A chave é gratuita e aumenta o rate limit de ~90 para ~600 req/min.
-
-Crie um arquivo `.env` na raiz do projeto:
-```
-TRANSPARENCIA_API_KEY=sua_chave_aqui
-```
-
-Carregue antes de executar:
-```bash
-export $(cat .env | xargs)   # Linux/Mac
-```
-
-### 3. Carga histórica (primeira vez — pode demorar horas)
-```bash
-python atualizar_dados.py --historico
-```
-
-### 4. Atualização diária (adicionar ao cron)
+### 2. Baixar os dados (primeira vez e atualizações mensais)
 ```bash
 python atualizar_dados.py
 ```
+O script baixa o Excel da RTN do site do Tesouro Nacional, processa tudo
+e salva os arquivos em `data/`. Precisa de conexão com a internet.
+Não é necessária nenhuma chave de API.
 
-### 5. Executar o dashboard
+### 3. Executar o painel
 ```bash
 streamlit run dashboard/app.py
 ```
+Abre em `http://localhost:8501`.
 
 ---
 
-## Tabelas gold disponíveis
+## Quando atualizar
 
-| Arquivo | Conteúdo |
+A RTN é publicada pela Secretaria do Tesouro Nacional normalmente na
+segunda semana de cada mês, com os dados do mês anterior.
+Basta rodar `python atualizar_dados.py` após a publicação.
+
+---
+
+## Abas do painel
+
+| Aba | Conteúdo |
 |---|---|
-| `despesas_mensal_orgao.parquet` | Gasto mensal por órgão + z-score + variação m/m e a/a |
-| `despesas_mensal_natureza.parquet` | Gasto mensal por natureza de despesa + z-score |
-| `despesas_vigilancia.parquet` | Empenhos individuais de rubricas/órgãos de alta vigilância |
-| `anomalias.parquet` | Alertas ativos (z-score ≥ 2σ) por órgão e natureza de despesa |
+| 💸 Gastos do Governo Federal | Contador em tempo real · Despesa Total do mês · Composição por categoria · Top 5 rubricas |
+| 🔭 Observatório Fiscal | KPIs mensais e acumulado 12 meses · Receita × Despesa × Resultado · Trajetória fiscal |
+| 🚨 Alertas | Detecção automática de anomalias via z-score (janela de 24 meses) |
+| 📋 Explorador | Qualquer série da RTN em gráfico interativo com download CSV |
 
 ---
 
-## Adicionar nova fonte (próximas iterações)
+## Métricas disponíveis
 
-1. Criar `pipelines/<fonte>/extract.py`, `silver.py`, `gold.py`
-2. Criar diretórios `data/<fonte>/raw/`, `silver/`, `gold/`
-3. Registrar em `atualizar_dados.py` → `FONTES_DISPONIVEIS`
-4. Adicionar aba correspondente no dashboard
+O painel permite alternar entre três formas de ver os dados:
 
-Fontes planejadas (ordem sugerida):
-- `cartao_corporativo` — CPGF, mensal, endpoint `/cartoes`
-- `emendas` — emendas parlamentares, D+1
-- `siop_creditos` — créditos suplementares (alertas de expansão orçamentária)
-- `resultado_primario` — nota mensal do Tesouro Nacional
+| Métrica | O que representa |
+|---|---|
+| Valores nominais (R$) | Valor em reais do período, sem ajuste de inflação |
+| Valores reais (R$ constantes) | Ajustado pelo IPCA — permite comparar entre anos sem distorção inflacionária |
+| % do PIB | Proporção do PIB — padrão internacional para comparação fiscal |
+
+---
+
+## Metodologia do contador
+
+O contador em tempo real usa a fórmula **ratio rolling 12 meses**:
+
+```
+previsão_mês_t = gasto_mesmo_mês_ano_anterior × ratio_rolling
+ratio_rolling  = Σ(gastos últimos 12m) / Σ(gastos 12m anteriores)
+```
+
+O ratio captura a tendência recente de crescimento dos gastos.
+Usar o mesmo mês do ano anterior como âncora incorpora a sazonalidade
+(dezembro sempre gasta mais que fevereiro, por exemplo).
 
 ---
 
 ## Metodologia de alertas
 
-**Z-score rolling**: para cada órgão/rubrica e mês t, calcula:
-```
-z = (valor_t - média(t-12, t-1)) / std(t-12, t-1)
-```
-- `z ≥ 2.0σ` → alerta amarelo (atenção)
-- `z ≥ 3.0σ` → alerta vermelho (crítico)
+**Z-score rolling** sobre janela de 24 meses:
 
-Thresholds configuráveis em `config/settings.py`.
-Mínimo de 3 observações para calcular z-score (evita falsos positivos no início da série).
+```
+z = (valor_mês - média(24 meses anteriores)) / desvio_padrão(24 meses anteriores)
+```
+
+| Z-score | Nível |
+|---|---|
+| \|z\| ≥ 3,0σ | 🔴 Alerta vermelho (evento muito raro, < 0,3% de probabilidade) |
+| \|z\| ≥ 2,0σ | 🟡 Alerta amarelo (evento incomum, < 5% de probabilidade) |
+
+O `.shift(1)` garante que o mês atual não entra no cálculo da sua própria
+média histórica (evita data leakage).
