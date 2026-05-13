@@ -1,11 +1,11 @@
 {
   "mes_referencia": "2026-04",
-  "previsao_total_mensal_rs": 221721221312.25,
-  "taxa_por_segundo_rs": 85540.5946,
-  "dias_no_mes": 30,
-  "segundos_no_mes": 2592000,
+  "mes_referencia_fim": "2026-05",
+  "previsao_total_2m_rs": 471235562872.82,
+  "taxa_por_segundo_rs": 89411.7264,
+  "segundos_2m": 5270400,
   "ratio_rolling": 1.13733,
-  "pago_base_rs": 194948825834.49,
+  "pago_base_2m_rs": 414334808052.2,
   "ultimo_dado_rtn": "2026-03",
-  "gerado_em": "2026-05-08T15:12:50.980356+00:00"
+  "gerado_em": "2026-05-13T13:58:46.682996+00:00"
 }
