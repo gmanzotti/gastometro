@@ -181,15 +181,11 @@ html, body, .stApp {{
     background-color: {C['bg']} !important;
 }}
 
-/* Barra superior da Streamlit — ocultamos o visual mas mantemos o DOM
-   para que o collapsedControl (botão > de reabrir sidebar) funcione.
-   display:none eliminaria o filho junto com o pai. */
+/* Barra superior do Streamlit — mantida visível para que o botão de
+   recolher/expandir a sidebar funcione. Estilizada para o tema escuro. */
 [data-testid="stHeader"] {{
-    background: transparent !important;
-    height: 0 !important;
-    min-height: 0 !important;
-    padding: 0 !important;
-    overflow: visible !important;
+    background-color: {C['bg2']} !important;
+    border-bottom: 1px solid {C['border']} !important;
 }}
 [data-testid="stDecoration"] {{ display: none !important; }}
 [data-testid="stToolbar"] {{ display: none !important; }}
@@ -270,21 +266,10 @@ p {{ color: {C['text_dim']}; }}
 /* Dividers */
 hr {{ border-color: {C['border']} !important; opacity: 0.5; }}
 
-/* Botão > de reabrir a sidebar: position:fixed o livra do height:0 do header */
+/* Botão de reabrir a sidebar */
 [data-testid="collapsedControl"] {{
     display: flex !important;
-    position: fixed !important;
-    top: 50vh !important;
-    left: 0 !important;
-    z-index: 9999 !important;
-    background-color: {C['bg2']} !important;
-    border: 1px solid {C['border']} !important;
-    border-left: none !important;
-    border-radius: 0 8px 8px 0 !important;
     color: {C['accent']} !important;
-    padding: 10px 6px !important;
-    cursor: pointer !important;
-    box-shadow: 2px 0 8px rgba(0,0,0,0.4) !important;
 }}
 
 /* Alertas */
