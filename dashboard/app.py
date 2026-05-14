@@ -188,7 +188,6 @@ html, body, .stApp {{
     border-bottom: 1px solid {C['border']} !important;
 }}
 [data-testid="stDecoration"] {{ display: none !important; }}
-[data-testid="stToolbar"] {{ display: none !important; }}
 
 /* Sidebar */
 [data-testid="stSidebar"] {{
