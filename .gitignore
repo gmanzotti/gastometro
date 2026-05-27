@@ -26,5 +26,8 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Logs de execução do pipeline
+logs/
+
 # Arquivos temporários e de diagnóstico
 diagnostico_api_resultado.txt
