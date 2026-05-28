@@ -320,13 +320,13 @@ O Marketing consome os dados gerados pelo pipeline (seção [Dados produzidos](#
 ## Roadmap
 
 ### Concluído
-- [x] Pipeline de extração da RTN (Tesouro Nacional)
+- [x] Pipeline de extração da RTN (Tesouro Nacional) -> pipelines/federal/load.py
 - [x] Cálculo do contador em tempo real (ratio rolling 12 meses)
 - [x] Streamlit para prototipagem de visualizações
 - [x] Versionamento no Azure DevOps da FIESP
 
 ### Próximo passo
-- [ ] Desenvolver `pipelines/rreo/load.py` — extração e transformação dos dados de despesa de estados e municípios (RREO)
+- [ ] Desenvolver `pipelines/subnacionais/load.py` — extração e transformação dos dados de despesa de estados e municípios (RREO)
 - [ ] Adaptar pipeline para gravar no ADLS Gen2 (aguardando infra TI)
 - [ ] Documentar e entregar as visualizações ao Marketing para implementação em HTML/C#
 

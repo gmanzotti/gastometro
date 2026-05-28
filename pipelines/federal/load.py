@@ -12,11 +12,25 @@ O QUE É A RTN?
 
 O QUE ESTE SCRIPT FAZ?
   1. Baixa o arquivo Excel da RTN direto do site do Tesouro Nacional
-  2. Lê as 4 abas relevantes do Excel:
-       1.1   → série mensal em R$ correntes (nominal)
-       1.1-A → série mensal em R$ constantes deflacionados pelo IPCA
-       2.1   → série anual em R$ correntes (para calcular o PIB)
-       2.1-A → série anual como % do PIB (para calcular o PIB)
+  2. Lê 6 abas relevantes do Excel:
+
+     SÉRIES MENSAIS (uma linha por indicador, uma coluna por mês):
+       1.2   → série mensal DETALHADA em R$ correntes (nominal)
+       1.2-A → série mensal DETALHADA em R$ constantes deflacionados pelo IPCA
+               (usamos 1.2 em vez de 1.1 porque a 1.1 é uma versão resumida —
+               a 1.2 tem mais rubricas desagregadas, permitindo análises futuras)
+
+     INVESTIMENTO PÚBLICO (linha única por aba, dado agregado):
+       1.3   → total de investimento público em R$ correntes
+       1.3-A → total de investimento público em R$ constantes
+               (o investimento aparece diluído nas rubricas de despesa nas abas
+               1.2/1.2-A; as abas 1.3/1.3-A isolam esse dado como agregado,
+               o que nos permite separar gastos correntes de investimento)
+
+     SÉRIES ANUAIS (usadas só para calcular o PIB, base para % do PIB):
+       2.2   → série anual DETALHADA em R$ correntes
+       2.2-A → série anual DETALHADA como % do PIB
+
   3. Transforma de "formato wide" para "formato tidy/long" (ver abaixo)
   4. Calcula o PIB anual e o % que cada item representa do PIB
   5. Salva tudo em um único arquivo Parquet
@@ -40,6 +54,11 @@ FORMATO WIDE vs. FORMATO TIDY (LONG):
 SAÍDA:
   data/rtn/rtn_mensal.parquet — arquivo Parquet com colunas:
     ano, mes, data, discriminacao, corrente_milhoes, constante_milhoes, pct_pib
+
+  As linhas de investimento (originadas das abas 1.3/1.3-A) aparecem no
+  mesmo parquet, identificadas pela coluna `discriminacao`. Para filtrá-las:
+    df[df["discriminacao"].str.contains("nvestimento", case=False)]
+
   data/rtn/metadata.json — período-base do deflator IPCA e data do último dado
 
 COMO RODAR:
@@ -86,6 +105,12 @@ RTN_DIR.mkdir(parents=True, exist_ok=True)   # cria a pasta se não existir
 DESTINO   = RTN_DIR / "rtn_mensal.parquet"   # arquivo de saída principal
 META_FILE = RTN_DIR / "metadata.json"         # metadados (base IPCA, última data)
 
+# Índice iloc da linha de investimento agregado nas abas 1.3 e 1.3-A.
+# A linha 6 do Excel (1-indexado) corresponde ao iloc[0] porque o cabeçalho
+# ocupa as 5 primeiras linhas (header=4 no pandas, que é 0-indexado).
+# Se o layout do Excel mudar e a linha de investimento se deslocar, ajuste aqui.
+LINHA_INVESTIMENTO = 0
+
 
 # ── Etapa 1: Download ─────────────────────────────────────────────────────
 
@@ -128,7 +153,7 @@ def _ler_aba_anual(xl: pd.ExcelFile, aba: str) -> pd.DataFrame:
     """
     Lê uma aba de série anual (colunas = anos inteiros, ex: 2010, 2011...).
     Mesma lógica de limpeza de rodapé da versão mensal.
-    Usada apenas para derivar o PIB anual (abas 2.1 e 2.1-A).
+    Usada apenas para derivar o PIB anual (abas 2.2 e 2.2-A).
     """
     df = pd.read_excel(xl, sheet_name=aba, header=4)
     df = df.rename(columns={df.columns[0]: "discriminacao"})
@@ -166,6 +191,43 @@ def _melt_mensal(df_wide: pd.DataFrame, col_valor: str) -> pd.DataFrame:
     return df
 
 
+# ── Etapa 2b: Extração do investimento público agregado ───────────────────
+
+def _extrair_investimento(xl: pd.ExcelFile) -> pd.DataFrame:
+    """
+    Extrai a linha de investimento público total das abas 1.3 e 1.3-A.
+
+    POR QUE 1.3 E NÃO 1.2?
+      Nas abas 1.2/1.2-A, o investimento aparece como uma entre várias
+      rubricas de despesa, sem destaque. As abas 1.3/1.3-A foram criadas
+      pelo Tesouro justamente para isolar o investimento como agregado
+      independente — ideal para análises que separam gasto corrente de
+      investimento (ex: comparar ajuste fiscal via corte de investimento
+      vs corte de custeio).
+
+    QUAL LINHA?
+      A linha 6 do Excel (1-indexado) é a primeira linha de dados, logo
+      após o cabeçalho de 5 linhas. Corresponde a iloc[0] no DataFrame
+      resultante do read_excel com header=4.
+      Ela contém o total agregado de investimento público.
+      O nome exato da rubrica (coluna 'discriminacao') vem do próprio Excel.
+    """
+    # Lê as abas e filtra notas de rodapé (mesma lógica das outras abas)
+    df_corr_wide = _ler_aba_mensal(xl, "1.3").iloc[[LINHA_INVESTIMENTO]]
+    df_cons_wide = _ler_aba_mensal(xl, "1.3-A").iloc[[LINHA_INVESTIMENTO]]
+
+    # Transforma wide → tidy para cada série
+    df_c = _melt_mensal(df_corr_wide, "corrente_milhoes")
+    df_k = _melt_mensal(df_cons_wide, "constante_milhoes")
+
+    # Une as duas séries pelo par (indicador, data)
+    return df_c.merge(
+        df_k[["discriminacao", "data", "constante_milhoes"]],
+        on=["discriminacao", "data"],
+        how="left",
+    )
+
+
 # ── Etapa 3: Cálculo do PIB anual ─────────────────────────────────────────
 
 def _computar_pib_por_ano(
@@ -181,8 +243,8 @@ def _computar_pib_por_ano(
       % do PIB, a comparação fica justa.
 
     COMO É CALCULADO?
-      A aba 2.1 traz a Receita Total em R$ correntes por ano.
-      A aba 2.1-A traz a mesma receita como proporção decimal do PIB.
+      A aba 2.2 traz a Receita Total em R$ correntes por ano.
+      A aba 2.2-A traz a mesma receita como proporção decimal do PIB.
       (ex: 0.2274 significa que a receita foi 22,74% do PIB naquele ano)
 
       Portanto: PIB_ano = Receita_corrente / Proporção_decimal
@@ -233,28 +295,31 @@ def _computar_pib_por_ano(
 def transformar(conteudo: bytes) -> tuple:
     """
     Recebe o conteúdo binário do Excel e retorna:
-      - DataFrame final tidy com todas as séries mensais + % PIB
+      - DataFrame final tidy com todas as séries mensais + investimento + % PIB
       - Dicionário de metadados (base IPCA, última data disponível)
     """
     # pd.ExcelFile lê o Excel na memória sem extrair para disco
     xl = pd.ExcelFile(io.BytesIO(conteudo))
 
-    # Lê as duas séries mensais (nominal e real)
-    df_corr_wide = _ler_aba_mensal(xl, "1.1")    # R$ correntes (nominais)
-    df_cons_wide = _ler_aba_mensal(xl, "1.1-A")  # R$ constantes (deflacionados pelo IPCA)
+    # ── Séries mensais principais (abas 1.2 e 1.2-A) ──────────────────────
+    # Usamos 1.2 (detalhada) em vez de 1.1 (resumida) para ter mais rubricas
+    df_corr_wide = _ler_aba_mensal(xl, "1.2")    # R$ correntes (nominais)
+    df_cons_wide = _ler_aba_mensal(xl, "1.2-A")  # R$ constantes (deflacionados pelo IPCA)
 
     # Extrai o rótulo do período-base do deflator IPCA da terceira linha da aba
     # Ex: "Valores de Mar/2026" → base_constante = "Mar/2026"
-    titulo_unidade = str(pd.read_excel(xl, sheet_name="1.1-A", header=None).iloc[2, 0])
+    titulo_unidade = str(pd.read_excel(xl, sheet_name="1.2-A", header=None).iloc[2, 0])
     m = re.search(r"Valores de (\w{3}/\d{4})", titulo_unidade)
     base_constante = m.group(1) if m else "base IPCA"
 
-    # Lê as séries anuais para derivar o PIB
-    df_anual_corr = _ler_aba_anual(xl, "2.1")
-    df_anual_pib  = _ler_aba_anual(xl, "2.1-A")
+    # ── PIB anual (abas 2.2 e 2.2-A) ─────────────────────────────────────
+    # Usamos 2.2 (detalhada) em vez de 2.1 (resumida) — consistente com a
+    # escolha das séries mensais. A lógica de cálculo do PIB é a mesma.
+    df_anual_corr = _ler_aba_anual(xl, "2.2")
+    df_anual_pib  = _ler_aba_anual(xl, "2.2-A")
     pib_por_ano   = _computar_pib_por_ano(df_anual_corr, df_anual_pib)
 
-    # Transforma wide → tidy para as duas séries mensais
+    # ── Melt wide → tidy para as séries mensais ───────────────────────────
     df_c = _melt_mensal(df_corr_wide, "corrente_milhoes")
     df_k = _melt_mensal(df_cons_wide, "constante_milhoes")
 
@@ -266,6 +331,13 @@ def transformar(conteudo: bytes) -> tuple:
         how="left",
     )
 
+    # ── Investimento público agregado (abas 1.3 e 1.3-A) ─────────────────
+    # Concatemos as linhas de investimento antes de calcular ano/mes/pct_pib
+    # para que o investimento receba o mesmo tratamento que as demais séries.
+    df_inv = _extrair_investimento(xl)
+    df = pd.concat([df, df_inv], ignore_index=True)
+
+    # ── Colunas derivadas ─────────────────────────────────────────────────
     df["ano"] = df["data"].dt.year
     df["mes"] = df["data"].dt.month
 
