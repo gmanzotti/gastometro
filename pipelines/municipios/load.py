@@ -313,6 +313,7 @@ def _salvar_lote(novos_dfs: list[pd.DataFrame]) -> int:
         ["uf", "ano", "periodo", "cod_conta", "coluna"]
     ).reset_index(drop=True)
 
+    MUNICIPIOS_DIR.mkdir(parents=True, exist_ok=True)
     df_final.to_parquet(DESTINO, index=False)
     return len(df_final)
 
