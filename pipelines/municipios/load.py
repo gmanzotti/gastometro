@@ -16,10 +16,10 @@ com duas diferenças principais:
   2. SIMPLIFICADO vs. COMPLETO
      Municípios com menos de 50.000 habitantes podem publicar o RREO
      Simplificado (Anexo 14), com estrutura diferente do Anexo 01.
-     Para o protótipo isso não é problema: todas as capitais são grandes
-     e publicam o Anexo 01 completo (co_tipo_demonstrativo="RREO").
-     Na extração completa (EXTRAIR_TODOS=True), o pipeline detecta
-     automaticamente pelo campo `populacao` qual tipo usar.
+     O pipeline tenta co_tipo_demonstrativo="RREO" para TODOS os municípios:
+     os que publicam o Completo voluntariamente retornam dados; os que só
+     publicam o Simplificado retornam vazio e são excluídos do parquet.
+     Isso maximiza a cobertura sem risco de capturar estruturas inconsistentes.
 
 SAÍDA:
   data/municipios/gastos_municipios.parquet — mesmas colunas do parquet estadual:
@@ -63,6 +63,16 @@ URL_RREO  = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/rreo"
 # False → apenas as 27 capitais (protótipo, ~35 min)
 # True  → todos os ~5.571 municípios (produção, ~4,5 dias na VM)
 EXTRAIR_TODOS = False
+
+# ── Modo de teste por amostra ─────────────────────────────────────────────────
+# Quando EXTRAIR_TODOS=True e AMOSTRA_N > 0, extrai uma amostra aleatória de
+# N municípios estratificados (metade ≥50k hab., metade <50k) — útil para
+# estimar taxa de erros antes de comprometer ~4,5 dias de processamento.
+# Use ANO_TESTE para limitar a 1 ano e obter resultado em ~12 minutos.
+# Ex: AMOSTRA_N=100, ANO_TESTE=2024 → 600 req. ≈ 12 min
+AMOSTRA_N    = 0     # 0 = desabilitado; ex: 100 para amostrar 100 municípios
+ANO_TESTE    = None  # None = todos os anos; ex: 2024 para testar apenas 1 ano
+SEED_AMOSTRA = 42    # semente aleatória — garante que a mesma amostra se repita
 
 ANO_INICIO            = 2015   # primeiro ano disponível no SICONFI
 INTERVALO_REQUISICAO  = 1.1    # segundos entre requisições (rate limit: 1 req/s)
@@ -138,8 +148,16 @@ COLS_SAIDA = ["ano", "periodo", "cod_ibge", "uf", "ente", "populacao",
 # ── Destinos de saída ─────────────────────────────────────────────────────────
 MUNICIPIOS_DIR = DATA_DIR / "municipios"
 MUNICIPIOS_DIR.mkdir(parents=True, exist_ok=True)
-DESTINO   = MUNICIPIOS_DIR / "gastos_municipios.parquet"
-META_FILE = MUNICIPIOS_DIR / "metadata.json"
+
+# Em modo amostra, isola a saída em subpasta para não contaminar o parquet de produção
+_modo_amostra = EXTRAIR_TODOS and AMOSTRA_N > 0
+_destino_dir  = (
+    MUNICIPIOS_DIR / f"amostra_n{AMOSTRA_N}_ano{ANO_TESTE or 'todos'}"
+    if _modo_amostra else MUNICIPIOS_DIR
+)
+_destino_dir.mkdir(parents=True, exist_ok=True)
+DESTINO   = _destino_dir / "gastos_municipios.parquet"
+META_FILE = _destino_dir / "metadata.json"
 
 
 # ── Etapa 1: Lista de municípios a extrair ────────────────────────────────────
@@ -164,8 +182,10 @@ def buscar_entes_municipios() -> pd.DataFrame:
         log.info("Modo protótipo: %d capitais estaduais selecionadas", len(df))
         return df
 
-    # Modo produção: busca todos os municípios no SICONFI
-    log.info("Modo produção: buscando todos os municípios no SICONFI...")
+    # Modo produção (ou amostra): busca todos os municípios no SICONFI
+    # co_tipo_ente="E" retorna TODAS as ~5.600 entidades (estados + municípios);
+    # o filtro real é esfera=="M" abaixo.
+    log.info("Buscando lista completa de municípios no SICONFI...")
     r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30, verify=False)
     r.raise_for_status()
 
@@ -177,41 +197,43 @@ def buscar_entes_municipios() -> pd.DataFrame:
         .sort_values(["uf", "populacao"], ascending=[True, False])
         .reset_index(drop=True)
     )
-    log.info("Encontrados %d municípios", len(municipios))
+    log.info("Encontrados %d municípios (antes de amostrar)", len(municipios))
+
+    if AMOSTRA_N > 0:
+        # Estratificado: metade ≥50k (RREO completo), metade <50k (Simplificado)
+        # → revela taxa de cobertura real por faixa de tamanho
+        grandes  = municipios[municipios["populacao"] >= POP_MINIMA_COMPLETO]
+        pequenos = municipios[municipios["populacao"] <  POP_MINIMA_COMPLETO]
+        n_grandes  = min(AMOSTRA_N // 2, len(grandes))
+        n_pequenos = min(AMOSTRA_N - n_grandes, len(pequenos))
+        municipios = pd.concat([
+            grandes.sample(n_grandes,   random_state=SEED_AMOSTRA),
+            pequenos.sample(n_pequenos, random_state=SEED_AMOSTRA),
+        ]).reset_index(drop=True)
+        log.info(
+            "Amostra estratificada: %d municípios (%d com pop≥50k | %d com pop<50k)",
+            len(municipios), n_grandes, n_pequenos,
+        )
+
     return municipios
 
 
 # ── Etapa 2: Download do RREO por município/período ───────────────────────────
 
-def _tipo_demonstrativo(populacao: int) -> str:
-    """
-    Retorna o co_tipo_demonstrativo correto baseado na população.
-
-    Municípios < 50k hab. podem usar o RREO Simplificado. Acima desse limiar,
-    o RREO completo (Anexo 01) é obrigatório e retorna a estrutura padrão.
-
-    Para o protótipo (todas capitais > 50k), sempre retorna "RREO".
-    Para a extração completa, isso evita requisições que retornariam vazias.
-    """
-    return "RREO" if populacao >= POP_MINIMA_COMPLETO else "RREO-Simplificado"
-
-
 def buscar_rreo_municipio(cod_ibge: int, ano: int, periodo: int,
                           populacao: int = POP_MINIMA_COMPLETO + 1) -> pd.DataFrame:
     """
     Baixa o Anexo 01 do RREO para um município, ano e bimestre específicos.
-    Lógica idêntica ao pipeline de estados, com detecção de tipo por população.
+
+    Tenta co_tipo_demonstrativo="RREO" para TODOS os municípios, inclusive os
+    <50k hab. — muitos publicam o RREO Completo voluntariamente mesmo não sendo
+    obrigados. Municípios que só publicam o Simplificado (Anexo 14) retornam
+    vazio da API e são simplesmente excluídos do parquet, sem erro.
     """
-    tipo = _tipo_demonstrativo(populacao)
-
-    # Municípios pequenos usam o Simplificado — não tem Anexo 01, pulamos por ora
-    if tipo == "RREO-Simplificado":
-        return pd.DataFrame()
-
     params = {
         "an_exercicio":          ano,
         "nr_periodo":            periodo,
-        "co_tipo_demonstrativo": tipo,
+        "co_tipo_demonstrativo": "RREO",
         "no_anexo":              "RREO-Anexo 01",
         "id_ente":               cod_ibge,
     }
@@ -277,14 +299,16 @@ def _construir_combinacoes(municipios: pd.DataFrame) -> list[tuple]:
     """Gera todas as combinações (município, ano, bimestre) a extrair."""
     ano_limite, periodo_limite = _bimestre_maximo_atual()
     ano_atual = datetime.now().year
+    # ANO_TESTE limita a extração a um único ano — útil no modo amostra
+    anos = [ANO_TESTE] if ANO_TESTE is not None else range(ANO_INICIO, ano_atual + 1)
     combinacoes = []
 
     for _, mun in municipios.iterrows():
-        for ano in range(ANO_INICIO, ano_atual + 1):
+        for ano in anos:
             for periodo in range(1, 7):
-                if ano == ano_limite and periodo > periodo_limite:
-                    continue
                 if ano > ano_limite:
+                    continue
+                if ano == ano_limite and periodo > periodo_limite:
                     continue
                 combinacoes.append((
                     int(mun["cod_ibge"]),
@@ -341,20 +365,27 @@ def extrair_historico() -> None:
         log.info("Parquet já está atualizado. Nada a fazer.")
         return
 
-    lote_atual: list[pd.DataFrame] = []
-    erros = 0
+    lote_atual:   list[pd.DataFrame] = []
+    n_com_dados = 0   # bimestres com resposta não-vazia
+    n_sem_dados = 0   # bimestres sem dados (pequenos/não-publicado)
+    muns_com_dados: set[int] = set()   # municípios com ≥1 bimestre com dados
 
     for i, (cod_ibge, populacao, ano, periodo) in enumerate(pendentes, 1):
         if i % 50 == 0 or i == 1:
             log.info(
-                "Progresso: %d/%d (%.1f%%) | lote: %d | erros: %d",
-                i, len(pendentes), 100 * i / len(pendentes), len(lote_atual), erros,
+                "Progresso: %d/%d (%.1f%%) | lote: %d | com_dados: %d | sem_dados: %d",
+                i, len(pendentes), 100 * i / len(pendentes),
+                len(lote_atual), n_com_dados, n_sem_dados,
             )
 
         df = buscar_rreo_municipio(cod_ibge, ano, periodo, populacao)
 
         if not df.empty:
             lote_atual.append(df)
+            n_com_dados += 1
+            muns_com_dados.add(cod_ibge)
+        else:
+            n_sem_dados += 1
 
         if len(lote_atual) >= SALVAR_A_CADA:
             n = _salvar_lote(lote_atual)
@@ -367,13 +398,33 @@ def extrair_historico() -> None:
         n = _salvar_lote(lote_atual)
         log.info("Lote final salvo: parquet tem %d linhas", n)
 
+    # ── Resumo de cobertura ───────────────────────────────────────────────────
+    total = n_com_dados + n_sem_dados
+    pct_dados   = 100 * n_com_dados / total if total else 0
+    pct_sem     = 100 * n_sem_dados / total if total else 0
+    total_muns  = len({c[0] for c in pendentes})
+    pct_cobertura = 100 * len(muns_com_dados) / total_muns if total_muns else 0
+    log.info(
+        "=== RESUMO ==="
+        "\n  Requisições: %d total | %d com dados (%.1f%%) | %d sem dados (%.1f%%)"
+        "\n  Municípios:  %d total | %d com ≥1 bimestre (%.1f%%)"
+        "\n  (respostas vazias incluem municípios <50k hab. — pulados por usar RREO Simplificado)",
+        total, n_com_dados, pct_dados, n_sem_dados, pct_sem,
+        total_muns, len(muns_com_dados), pct_cobertura,
+    )
+
 
 # ── Etapa 6: Ponto de entrada ─────────────────────────────────────────────────
 
 def main() -> None:
     """Baixa o histórico de gastos municipais e salva em parquet."""
     inicio = datetime.now()
-    modo = "produção (todos os municípios)" if EXTRAIR_TODOS else "protótipo (capitais)"
+    if not EXTRAIR_TODOS:
+        modo = "protótipo (capitais)"
+    elif AMOSTRA_N > 0:
+        modo = f"amostra (n={AMOSTRA_N}, ano={ANO_TESTE or 'todos'})"
+    else:
+        modo = "produção (todos os municípios)"
     log.info("=== Início da extração de gastos municipais — %s ===", modo)
 
     extrair_historico()
