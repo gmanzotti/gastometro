@@ -164,7 +164,7 @@ if ratio_desp:
         legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
     )
     plotly_dark(fig_traj, height=400, margin=dict(l=10, r=10, t=20, b=60))
-    st.plotly_chart(fig_traj, use_container_width=True, key="proj_trajetoria_desp")
+    st.plotly_chart(fig_traj, width='stretch', key="proj_trajetoria_desp")
 
     # Valor projetado no fim do horizonte
     if not df_proj_desp.empty:
@@ -246,7 +246,7 @@ fig_comp_proj.update_layout(
     legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5, title=""),
 )
 plotly_dark(fig_comp_proj, height=420, margin=dict(l=10, r=10, t=20, b=60))
-st.plotly_chart(fig_comp_proj, use_container_width=True, key="proj_compressao")
+st.plotly_chart(fig_comp_proj, width='stretch', key="proj_compressao")
 
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 
@@ -404,7 +404,7 @@ if ratio_rec and not hist_rec.empty and not hist_obrig.empty:
         legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5, title=""),
     )
     plotly_dark(fig_cen, height=420, margin=dict(l=10, r=10, t=20, b=60))
-    st.plotly_chart(fig_cen, use_container_width=True, key="proj_cenario")
+    st.plotly_chart(fig_cen, width='stretch', key="proj_cenario")
 
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 
@@ -470,7 +470,7 @@ if not df_est.empty:
             showlegend=False,
         )
         plotly_dark(fig_trend, height=560, margin=dict(l=50, r=80, t=10, b=40))
-        st.plotly_chart(fig_trend, use_container_width=True, key="proj_trend_estados")
+        st.plotly_chart(fig_trend, width='stretch', key="proj_trend_estados")
     else:
         st.info("Necessário pelo menos 2 anos de dados para mostrar a tendência.")
 

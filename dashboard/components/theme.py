@@ -289,11 +289,11 @@ def render_navbar(active_page: str) -> None:
     links_html = ""
     for label, href in _NAV_PAGES:
         cls = "active" if href == active_href else ""
-        links_html += f'<a href="{href}" class="{cls}">{label}</a>'
+        links_html += f'<a href="{href}" class="{cls}" target="_self">{label}</a>'
 
     st.markdown(f"""
 <div class="gastometro-navbar">
-  <a href="/" class="nav-brand" style="text-decoration:none;">
+  <a href="/" class="nav-brand" style="text-decoration:none;" target="_self">
     {logo_img}Gastômetro FIESP
   </a>
   <div class="nav-links">

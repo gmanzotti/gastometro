@@ -97,7 +97,7 @@ def _render_hero():
     sub_estados   = "aguardando TI" if not est_c  else ""
     sub_municipios= "aguardando TI" if not mun_c  else ""
 
-    st.components.v1.html(f"""
+    st.html(f"""
 <div style="
     background: linear-gradient(135deg,{C['bg']} 0%,{C['bg3']} 100%);
     border: 1px solid {C['border']};
@@ -185,7 +185,7 @@ def _render_hero():
   update();
 }})();
 </script>
-""", height=290)
+""", unsafe_allow_javascript=True)
 
 
 # ── Termômetro de investimento ────────────────────────────────────────────
@@ -371,7 +371,7 @@ def _render_nav_cards():
     for (href, icone, titulo, desc), col in zip(cards, cols):
         with col:
             st.markdown(f"""
-<a href="{href}" style="text-decoration:none;">
+<a href="{href}" style="text-decoration:none;" target="_self">
   <div style="
     background:{C['bg2']};border:1px solid {C['border']};border-radius:14px;
     padding:28px 24px;cursor:pointer;transition:border-color 0.2s;height:160px;

@@ -125,7 +125,7 @@ def _aba_estados():
             height=460,
             margin=dict(l=0, r=0, t=0, b=0),
         )
-        st.plotly_chart(fig_map, use_container_width=True, key="mapa_estados")
+        st.plotly_chart(fig_map, width='stretch', key="mapa_estados")
     elif not ratio_df.empty:
         st.info("GeoJSON não disponível. Exibindo tabela.")
         st.dataframe(
@@ -136,7 +136,7 @@ def _aba_estados():
                 "invest_milhoes": "Invest. (R$ mi)",
                 "total_milhoes": "Total (R$ mi)",
             }),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width='stretch',
         )
 
     st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
@@ -152,7 +152,7 @@ def _aba_estados():
             df_rank["Invest. %"] = df_rank["Invest. %"].apply(
                 lambda v: f"{fmt_br(v, 1)}%"
             )
-            st.dataframe(df_rank, hide_index=True, use_container_width=True, height=420)
+            st.dataframe(df_rank, hide_index=True, width='stretch', height=420)
 
         with col_detail:
             _section_title("Detalhe por estado")
@@ -189,7 +189,7 @@ def _aba_estados():
                     color_discrete_sequence=[C["primary"]],
                 )
                 plotly_dark(fig_est, height=320, margin=dict(l=10, r=10, t=40, b=10))
-                st.plotly_chart(fig_est, use_container_width=True, key="est_serie")
+                st.plotly_chart(fig_est, width='stretch', key="est_serie")
 
                 # Investimento vs. corrente para o estado selecionado
                 _render_composicao_estado(df_uf, nome_est, ano_max, per_max)
@@ -244,7 +244,7 @@ def _render_composicao_estado(df_uf: pd.DataFrame, nome: str, ano: int, bim: int
         showlegend=False,
     )
     plotly_dark(fig, height=240, margin=dict(l=130, r=20, t=10, b=30))
-    st.plotly_chart(fig, use_container_width=True, key="est_composicao")
+    st.plotly_chart(fig, width='stretch', key="est_composicao")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -305,7 +305,7 @@ def _aba_municipios():
             color_discrete_sequence=[C["accent"]],
         )
         plotly_dark(fig_mun, height=300, margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig_mun, use_container_width=True, key="mun_serie")
+        st.plotly_chart(fig_mun, width='stretch', key="mun_serie")
 
     # Composição do município no último bimestre disponível
     st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
@@ -357,7 +357,7 @@ def _aba_municipios():
         showlegend=False,
     )
     plotly_dark(fig_comp_mun, height=220, margin=dict(l=130, r=20, t=10, b=30))
-    st.plotly_chart(fig_comp_mun, use_container_width=True, key="mun_composicao")
+    st.plotly_chart(fig_comp_mun, width='stretch', key="mun_composicao")
 
     st.caption(
         f"Município: {mun_nome} (cod. IBGE {mun_cod}) · "

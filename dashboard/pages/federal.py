@@ -134,7 +134,7 @@ with st.expander(f"Comparativo detalhado {ano_ant} × {ano_atual}", expanded=Fal
             str(ano_atual): fv(v_at),
             "Var. a/a":     (f"{'+' if diff and diff >= 0 else ''}{fmt_br(diff, 1)}%" if diff is not None else "—"),
         })
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
 
 
 # ── Seção 2: Receita × Despesa × Resultado ────────────────────────────────
@@ -184,7 +184,7 @@ fig.update_layout(
     ),
 )
 plotly_dark(fig, height=420, margin=dict(l=10, r=10, t=20, b=60))
-st.plotly_chart(fig, use_container_width=True, key="fed_receita_despesa")
+st.plotly_chart(fig, width='stretch', key="fed_receita_despesa")
 
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 
@@ -237,7 +237,7 @@ def _comp_chart(fn_val, titulo_key):
     )
     plotly_dark(fig, height=max(220, len(items) * 72 + 70),
                 margin=dict(l=185, r=20, t=10, b=30))
-    st.plotly_chart(fig, use_container_width=True, key=titulo_key)
+    st.plotly_chart(fig, width='stretch', key=titulo_key)
 
 with tab_mes:
     _comp_chart(
@@ -298,7 +298,7 @@ if traj:
         ),
     )
     plotly_dark(fig2, height=380, margin=dict(l=10, r=10, t=30, b=10))
-    st.plotly_chart(fig2, use_container_width=True, key="fed_trajetoria")
+    st.plotly_chart(fig2, width='stretch', key="fed_trajetoria")
 
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 
@@ -374,7 +374,7 @@ with st.expander("📋 Explorador de séries RTN", expanded=False):
             ),
         )
         plotly_dark(fig3, height=380, margin=dict(l=10, r=10, t=40, b=10))
-        st.plotly_chart(fig3, use_container_width=True, key="fed_explorador")
+        st.plotly_chart(fig3, width='stretch', key="fed_explorador")
 
         csv = sub_exp.to_csv(index=False).encode("utf-8")
         st.download_button(
