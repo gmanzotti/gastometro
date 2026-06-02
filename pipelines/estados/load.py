@@ -68,13 +68,6 @@ from pathlib import Path
 
 import pandas as pd
 import requests
-import urllib3
-
-# A rede corporativa da FIESP usa um proxy que re-assina certificados SSL,
-# gerando erro de validação. verify=False contorna isso — mesma solução do
-# pipeline federal. Em produção, o TI deve instalar o certificado raiz no servidor.
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.settings import DATA_DIR
 
@@ -90,7 +83,7 @@ URL_ENTES = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/entes"
 URL_RREO  = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/rreo"
 
 # ── Configurações de extração ──────────────────────────────────────────────────
-ANO_INICIO = 2015  # primeiro ano disponível no SICONFI (antes era SISTN/papel)
+ANO_INICIO = 2024  # últimos 2 anos (configurado para produção no Azure)
 
 # Intervalo entre requisições para respeitar o rate limit da API (1 req/s)
 INTERVALO_REQUISICAO = 1.1   # ligeiramente acima de 1s para margem de segurança
@@ -157,7 +150,7 @@ def buscar_entes_estados() -> pd.DataFrame:
     Retorna DataFrame com: cod_ibge, uf, ente, populacao
     """
     log.info("Buscando lista de estados no SICONFI...")
-    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30, verify=False)
+    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30)
     r.raise_for_status()
 
     df = pd.DataFrame(r.json()["items"])
@@ -218,7 +211,7 @@ def buscar_rreo_estado(cod_ibge: int, ano: int, periodo: int) -> pd.DataFrame:
 
     for tentativa in range(1, MAX_TENTATIVAS + 1):
         try:
-            r = requests.get(URL_RREO, params=params, timeout=30, verify=False)
+            r = requests.get(URL_RREO, params=params, timeout=30)
             r.raise_for_status()
             payload = r.json()
 

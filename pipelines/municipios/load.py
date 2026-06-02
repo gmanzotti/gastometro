@@ -41,10 +41,6 @@ from pathlib import Path
 
 import pandas as pd
 import requests
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.settings import DATA_DIR
 
@@ -62,7 +58,7 @@ URL_RREO  = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/rreo"
 # ── Modo de extração ──────────────────────────────────────────────────────────
 # False → apenas as 27 capitais (protótipo, ~35 min)
 # True  → todos os ~5.571 municípios (produção, ~4,5 dias na VM)
-EXTRAIR_TODOS = False
+EXTRAIR_TODOS = True
 
 # ── Modo de teste por amostra ─────────────────────────────────────────────────
 # Quando EXTRAIR_TODOS=True e AMOSTRA_N > 0, extrai uma amostra aleatória de
@@ -74,7 +70,7 @@ AMOSTRA_N    = 0     # 0 = desabilitado; ex: 100 para amostrar 100 municípios
 ANO_TESTE    = None  # None = todos os anos; ex: 2024 para testar apenas 1 ano
 SEED_AMOSTRA = 42    # semente aleatória — garante que a mesma amostra se repita
 
-ANO_INICIO            = 2015   # primeiro ano disponível no SICONFI
+ANO_INICIO            = 2024   # últimos 2 anos (configurado para produção no Azure)
 INTERVALO_REQUISICAO  = 1.1    # segundos entre requisições (rate limit: 1 req/s)
 MAX_TENTATIVAS        = 3
 SALVAR_A_CADA         = 100    # salva em disco a cada N requisições bem-sucedidas
@@ -186,7 +182,7 @@ def buscar_entes_municipios() -> pd.DataFrame:
     # co_tipo_ente="E" retorna TODAS as ~5.600 entidades (estados + municípios);
     # o filtro real é esfera=="M" abaixo.
     log.info("Buscando lista completa de municípios no SICONFI...")
-    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30, verify=False)
+    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30)
     r.raise_for_status()
 
     df = pd.DataFrame(r.json()["items"])
@@ -240,7 +236,7 @@ def buscar_rreo_municipio(cod_ibge: int, ano: int, periodo: int,
 
     for tentativa in range(1, MAX_TENTATIVAS + 1):
         try:
-            r = requests.get(URL_RREO, params=params, timeout=30, verify=False)
+            r = requests.get(URL_RREO, params=params, timeout=30)
             r.raise_for_status()
             payload = r.json()
 
