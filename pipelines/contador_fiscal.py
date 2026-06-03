@@ -290,6 +290,88 @@ def _agg_bimestral(df: pd.DataFrame) -> dict:
     return {(int(a), int(p)): float(v) for (a, p), v in agg.items()}
 
 
+# ── Imputação de bimestres incompletos ───────────────────────────────────
+
+def _imputar_bimestres_incompletos(df: pd.DataFrame, n_anos: int = 3) -> pd.DataFrame:
+    """
+    Estima valores dos estados que não enviaram o bimestre mais recente.
+
+    Contexto: o SICONFI recebe os dados com defasagem — no início de um bimestre,
+    apenas alguns estados já entregaram o relatório. Se usarmos o consolidado bruto,
+    o acc_base fica severamente subestimado (ex: B2/2026 com só AM e SC entregues).
+
+    Algoritmo por estado faltante:
+      ratio_historico = média(B_n / B_(n-1)) nos últimos n_anos para aquele estado
+      B_n_estimado    = B_(n-1)_real × ratio_historico
+
+    Aplicada apenas ao consolidado — os blocos individuais por UF usam só dados reais.
+    """
+    max_ano = df["ano"].max()
+    max_per = int(df[df["ano"] == max_ano]["periodo"].max())
+
+    if max_per == 1:
+        return df  # B1 não tem período anterior no mesmo ano
+
+    per_ant = max_per - 1
+
+    estados_com_max = set(df[(df["ano"] == max_ano) & (df["periodo"] == max_per)]["uf"].unique())
+    todos_os_estados = set(df[df["ano"] == max_ano]["uf"].unique())
+    faltantes = todos_os_estados - estados_com_max
+
+    if not faltantes:
+        return df
+
+    log.info(
+        "Imputação: %d estados sem B%d/%d — estimando via razão histórica (n=%d anos)",
+        len(faltantes), max_per, max_ano, n_anos,
+    )
+
+    anos_hist = sorted(a for a in df["ano"].unique() if a < max_ano)[-n_anos:]
+    if not anos_hist:
+        log.warning("Sem histórico disponível para imputação — retornando dados brutos.")
+        return df
+
+    rows_novos: list[pd.DataFrame] = []
+
+    for uf in sorted(faltantes):
+        df_uf = df[df["uf"] == uf]
+
+        df_ant = df_uf[(df_uf["ano"] == max_ano) & (df_uf["periodo"] == per_ant)]
+        if df_ant.empty:
+            log.warning("  %s: sem dado de B%d/%d — pulando imputação", uf, per_ant, max_ano)
+            continue
+
+        ratios = []
+        for ano_h in anos_hist:
+            v_n = df_uf[(df_uf["ano"] == ano_h) & (df_uf["periodo"] == max_per)]["valor_milhoes"].sum()
+            v_a = df_uf[(df_uf["ano"] == ano_h) & (df_uf["periodo"] == per_ant)]["valor_milhoes"].sum()
+            if v_a > 0 and v_n > 0:
+                ratios.append(v_n / v_a)
+
+        if not ratios:
+            log.warning("  %s: sem histórico para B%d/B%d — pulando", uf, max_per, per_ant)
+            continue
+
+        ratio = float(np.mean(ratios))
+        ratio = max(0.4, min(ratio, 2.5))  # guarda de sanidade
+
+        df_est = df_ant.copy()
+        df_est["periodo"] = max_per
+        df_est["valor_milhoes"] = df_est["valor_milhoes"] * ratio
+        rows_novos.append(df_est)
+
+        log.info(
+            "  %s: B%d estimado = R$%.0f mi (ratio=%.4f, %d anos)",
+            uf, max_per, df_est["valor_milhoes"].sum(), ratio, len(ratios),
+        )
+
+    if not rows_novos:
+        return df
+
+    log.info("Imputação concluída: %d estados estimados para B%d/%d.", len(rows_novos), max_per, max_ano)
+    return pd.concat([df] + rows_novos, ignore_index=True)
+
+
 # ── Esfera Estados ────────────────────────────────────────────────────────
 
 def calcular_estados() -> dict:
@@ -318,8 +400,11 @@ def calcular_estados() -> dict:
 
     resultado: dict[str, dict] = {}
 
-    # Consolidado: soma de todos os estados
-    bloco = _calcular_bloco_bimestral(_agg_bimestral(df), "estados._consolidado")
+    # Consolidado: imputa bimestres faltantes antes de agregar, para evitar que
+    # acc_base seja subestimado quando poucos estados enviaram o bimestre mais recente.
+    # Os blocos individuais por UF usam apenas dados reais (df sem imputação).
+    df_cons = _imputar_bimestres_incompletos(df)
+    bloco = _calcular_bloco_bimestral(_agg_bimestral(df_cons), "estados._consolidado")
     if bloco:
         resultado["_consolidado"] = bloco
         log.info(

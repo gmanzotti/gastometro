@@ -1,0 +1,116 @@
+================================================================================
+GASTÔMETRO FIESP — LOG DE ATIVIDADES E PRÓXIMOS PASSOS
+================================================================================
+Uso: registrar o que foi feito em cada sessão e o que ainda precisa ser feito.
+Status: [FEITO] | [PENDENTE] | [EM ANDAMENTO] | [CANCELADO]
+================================================================================
+
+=== Iniciando sessão de 03/06/2026 ===
+
+--------------------------------------------------------------------------------
+AUDITORIA DOS DADOS SUBNACIONAIS
+--------------------------------------------------------------------------------
+
+[FEITO] Identificar discrepância nos valores de estados (R$ 315 bi vs R$ 637 bi
+        do Gasto Brasil) e municípios (R$ 77 bi vs R$ 650 bi).
+
+[FEITO] Diagnosticar causas da discrepância:
+        - Estados: B2/2026 só tem AM e SC no SICONFI (24 estados não enviaram)
+          → acc_base subestimado: R$ 204 bi em vez de ~R$ 360 bi
+        - Municípios: parquet tem apenas 26 capitais, não todos os 5.570 mun.
+        - DF ausente dos estados: esfera='D' no SICONFI, filtro busca esfera='E'
+
+[FEITO] Investigar metodologia do Gasto Brasil:
+        - Mesma fonte (SICONFI RREO via STN API)
+        - Usa "despesas efetivamente pagas" (inclui RAP)
+        - Cobre todos os ~5.500 municípios com imputação estatística por ML
+        - Inclui DF (provavelmente via interpolação ou query separada)
+
+[FEITO] Confirmar status do DF na API SICONFI:
+        - DF tem esfera='D' (Distrito Federal), não esfera='E' (estados)
+        - Filtro do pipeline busca apenas esfera='E' → DF sempre ignorado
+        - RREO do DF tem dados completos (582 itens, Anexo 01, 2026-B1)
+        - DF 2026 B1: despesas liquidadas = R$ 5.318 mi; empenhadas = R$ 8.605 mi
+        - DF NÃO tem colunas acumuladas ("ATÉ O BIMESTRE") — só fluxo bimestral
+
+--------------------------------------------------------------------------------
+CORREÇÕES IMPLEMENTADAS NESTA SESSÃO
+--------------------------------------------------------------------------------
+
+[FEITO] Corrigir pipeline de estados para incluir o DF:
+        - Arquivo: pipelines/estados/load.py
+        - Adicionado bloco após filtro esfera='E' que inclui DF (cod_ibge=53)
+          manualmente (DF tem esfera='D' no SICONFI)
+        - ATENÇÃO: ainda é necessário rodar o pipeline para extrair os dados
+          históricos do DF e salvá-los no parquet
+
+[FEITO] Implementar imputação sazonal no contador para bimestres incompletos:
+        - Arquivo: pipelines/contador_fiscal.py
+        - Função _imputar_bimestres_incompletos() adicionada
+        - Aplica ratio histórico B_n/B_(n-1) dos últimos 3 anos por estado
+        - Resultado: acc_base estados passou de R$ 204 bi → R$ 415 bi
+        - Estados no dashboard: de ~R$ 316 bi → ~R$ 547 bi (mais próximo do real)
+        - Comparação: Gasto Brasil mostra R$ 637 bi (diferença residual = DF faltante
+          + método diferente de fase de despesa "pago" vs "liquidado")
+        - contador_fiscal.json atualizado com os novos valores
+
+--------------------------------------------------------------------------------
+PRÓXIMOS PASSOS — CORREÇÕES PENDENTES
+--------------------------------------------------------------------------------
+
+[PENDENTE] Rodar pipeline de estados para extrair histórico do DF:
+           - Comando: python pipelines/estados/load.py
+           - Estimativa: ~30 min (só o DF, incremental)
+           - Notas: parquet atual não tem DF; o load.py já está corrigido
+           - Impacto esperado: +R$ 5-8 bi no acc_base dos estados (~B1/2026 DF)
+
+[FEITO] Atualizar label "Municípios" no dashboard para "Capitais (26)":
+        - dashboard/app.py: card hero, legenda do contador e nota metodológica
+          ("ℹ️ Estados com bimestre pendente estimados por sazonalidade histórica ·
+            Municípios: apenas capitais estaduais")
+        - dashboard/pages/subnacional.py: aba renomeada para "Capitais (protótipo)"
+          e banner de aviso adicionado dentro da aba
+
+[PENDENTE] Decidir fase de despesa: liquidado (atual) vs pago (Gasto Brasil)?
+           - Não urgente; liquidado é metodologicamente mais conservador e correto
+           - Se mudar, alterar COLUNA_FLUXO e COLUNA_PADRAO em ambos os pipelines
+
+[FEITO] Três correções na aba Subnacional:
+        1. Hover defasado: calcular_serie_estado() agora deduplica com groupby;
+           hovertemplate explícito (%{x} / %{y}) adicionado em estados e capitais
+        2. Default conta: selectbox passa index para DespesasExcetoIntraOrcamentarias
+           tanto em estados quanto em capitais
+        3. Coroplético não exibindo:
+           a) carregar_geojson_estados(): adicionado verify=False (proxy FIESP)
+           b) calcular_ratio_investimento_estados(): trocado período máximo global
+              por período com maior cobertura de estados (idxmax das contagens)
+              → mapa agora mostra todos os estados com B1 em vez de só SC e AM
+
+[FEITO] Corrigir hover defasado (2ª rodada — causa raiz identificada):
+        - Diagnóstico: B1 existe no parquet (1.777 registros) — problema era no
+          rendering do eixo categórico do Plotly com 67+ barras
+        - Solução: substituído px.bar por go.Bar com eixo numérico (x=0,1,...,n-1),
+          ticktext explícito e customdata com o label bimestral
+        - Arquivos: dashboard/pages/subnacional.py (estados e capitais)
+
+[FEITO] Corrigir coroplético "GeoJSON não disponível" (2ª rodada):
+        - Causa raiz: URL errada (/api/v3/malhas/estados não existe no IBGE;
+          endpoint correto é /api/v3/malhas/paises/BR?intrarregiao=UF&...)
+        - Solução dupla:
+          a) GeoJSON baixado e salvo em data/estados_geojson.json (1,1 MB, 27 features)
+          b) carregar_geojson_estados() agora lê arquivo local primeiro; rede é fallback
+          c) Mudado de @st.cache_resource para @st.cache_data (suporta dicts serializáveis)
+        - Arquivo: dashboard/components/theme.py
+
+--------------------------------------------------------------------------------
+PENDENTES DE SESSÕES ANTERIORES
+--------------------------------------------------------------------------------
+
+[PENDENTE] Pipeline completo de municípios (todos os 5.570 mun.):
+           - Estimativa: ~4 dias de execução
+           - Aguardando decisão estratégica / infraestrutura
+
+[PENDENTE] Outros itens do backlog (dívida/PIB, arcabouço fiscal, etc.) —
+           ver memory/project_backlog.md
+
+================================================================================

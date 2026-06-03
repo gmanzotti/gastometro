@@ -371,7 +371,7 @@ Estas duas questões **devem ser resolvidas antes** de o sistema entrar em produ
 O contador usa a fórmula **ratio rolling 12 meses**:
 
 ```
-previsão_mês_t = gasto_mesmo_mês_ano_anterior × ratio_rolling
+previsão_meses_t = gasto_mesmo_bimestre_ano_anterior × ratio_rolling
 
 ratio_rolling = Σ(gastos nos últimos 12 meses) / Σ(gastos nos 12 meses anteriores)
 ```

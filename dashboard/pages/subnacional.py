@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -73,8 +72,9 @@ def _aba_estados():
         return
 
     ratio_df = calcular_ratio_investimento_estados(df_est)
-    ano_max  = df_est["ano"].max()
-    per_max  = df_est[df_est["ano"] == ano_max]["periodo"].max()
+    # Usa o período que ratio_df calculou (maior cobertura), não o global
+    ano_max = int(ratio_df["ano"].iloc[0]) if not ratio_df.empty else df_est["ano"].max()
+    per_max = int(ratio_df["periodo"].iloc[0]) if not ratio_df.empty else 1
 
     # ── Mapa coroplético ──────────────────────────────────────────────────
     _section_title(f"Proporção de Investimento por Estado — {ano_max} B{per_max}")
@@ -98,11 +98,10 @@ def _aba_estados():
             zmin=0,
             zmax=ratio_df_map["invest_ratio"].max() * 1.1,
             colorbar=dict(
-                title="%",
+                title=dict(text="%", font=dict(color=C["text_dim"], size=11)),
                 thickness=14,
                 bgcolor="rgba(13,27,46,0.85)",
                 tickfont=dict(color=C["text_dim"], size=10),
-                titlefont=dict(color=C["text_dim"], size=11),
             ),
             text=ratio_df_map["uf"],
             customdata=ratio_df_map[["ente", "invest_ratio", "invest_milhoes", "total_milhoes"]].values,
@@ -165,9 +164,12 @@ def _aba_estados():
 
             # Série temporal: investimento vs. despesas correntes
             contas_disp = sorted(df_uf["cod_conta"].unique())
+            _default_conta = "DespesasExcetoIntraOrcamentarias"
+            _conta_idx = contas_disp.index(_default_conta) if _default_conta in contas_disp else 0
             conta_sel   = st.selectbox(
                 "Conta",
                 contas_disp,
+                index=_conta_idx,
                 format_func=lambda c: CONTAS_NOME.get(c, c),
                 key="est_conta_sel",
             )
@@ -182,13 +184,26 @@ def _aba_estados():
                                           conta_sel, col_viz)
 
             if not serie.empty:
-                fig_est = px.bar(
-                    serie, x="label", y="valor_milhoes",
-                    labels={"label": "Bimestre", "valor_milhoes": "R$ milhões"},
+                _idx = list(range(len(serie)))
+                fig_est = go.Figure(go.Bar(
+                    x=_idx,
+                    y=serie["valor_milhoes"].tolist(),
+                    marker_color=C["primary"],
+                    marker_line_width=0,
+                    customdata=serie["label"].tolist(),
+                    hovertemplate="<b>%{customdata}</b><br>R$ %{y:,.1f} mi<extra></extra>",
+                ))
+                fig_est.update_layout(
                     title=f"{nome_est} — {CONTAS_NOME.get(conta_sel, conta_sel)}",
-                    color_discrete_sequence=[C["primary"]],
+                    xaxis_title="Bimestre",
+                    yaxis_title="R$ milhões",
                 )
-                plotly_dark(fig_est, height=320, margin=dict(l=10, r=10, t=40, b=10))
+                fig_est.update_xaxes(
+                    tickvals=_idx,
+                    ticktext=serie["label"].tolist(),
+                    tickangle=45,
+                )
+                plotly_dark(fig_est, height=320, margin=dict(l=10, r=10, t=40, b=60))
                 st.plotly_chart(fig_est, width='stretch', key="est_serie")
 
                 # Investimento vs. corrente para o estado selecionado
@@ -252,6 +267,17 @@ def _render_composicao_estado(df_uf: pd.DataFrame, nome: str, ano: int, bim: int
 # ══════════════════════════════════════════════════════════════════════════
 
 def _aba_municipios():
+    st.markdown(
+        f"""<div style="background:rgba(245,158,11,0.08);border-left:3px solid {C['warning']};
+        border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:12px;color:{C['text_dim']};">
+        <strong style="color:{C['warning']};">Protótipo</strong> — exibe apenas as
+        <strong>26 capitais estaduais</strong>. O pipeline completo (~5.570 municípios)
+        está em produção e levará alguns dias para concluir a extração histórica.
+        Os valores aqui <em>não representam</em> o total municipal do Brasil.
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
     if df_mun.empty:
         st.info(
             "Dados de municípios não encontrados. "
@@ -282,29 +308,47 @@ def _aba_municipios():
 
     # Série temporal
     contas_mun = sorted(df_mun_sel["cod_conta"].unique())
+    _default_mun = "DespesasExcetoIntraOrcamentarias"
+    _mun_idx = contas_mun.index(_default_mun) if _default_mun in contas_mun else 0
     conta_mun  = st.selectbox(
         "Conta",
         contas_mun,
+        index=_mun_idx,
         format_func=lambda c: CONTAS_NOME.get(c, c),
         key="mun_conta_sel",
     )
 
-    df_serie_mun = df_mun_sel[
-        (df_mun_sel["cod_conta"] == conta_mun) &
-        (df_mun_sel["coluna"]    == COLUNA_PADRAO)
-    ].sort_values(["ano", "periodo"]).copy()
+    df_serie_mun = (
+        df_mun_sel[
+            (df_mun_sel["cod_conta"] == conta_mun) &
+            (df_mun_sel["coluna"]    == COLUNA_PADRAO)
+        ]
+        .groupby(["ano", "periodo"], as_index=False)["valor_milhoes"]
+        .sum()
+        .sort_values(["ano", "periodo"])
+    )
     df_serie_mun["label"] = (
         df_serie_mun["ano"].astype(str) + "-B" + df_serie_mun["periodo"].astype(str)
     )
 
     if not df_serie_mun.empty:
         _section_title(f"{mun_nome} ({uf_mun}) — {CONTAS_NOME.get(conta_mun, conta_mun)}")
-        fig_mun = px.bar(
-            df_serie_mun, x="label", y="valor_milhoes",
-            labels={"label": "Bimestre", "valor_milhoes": "R$ milhões"},
-            color_discrete_sequence=[C["accent"]],
+        _idx_mun = list(range(len(df_serie_mun)))
+        fig_mun = go.Figure(go.Bar(
+            x=_idx_mun,
+            y=df_serie_mun["valor_milhoes"].tolist(),
+            marker_color=C["accent"],
+            marker_line_width=0,
+            customdata=df_serie_mun["label"].tolist(),
+            hovertemplate="<b>%{customdata}</b><br>R$ %{y:,.1f} mi<extra></extra>",
+        ))
+        fig_mun.update_layout(xaxis_title="Bimestre", yaxis_title="R$ milhões")
+        fig_mun.update_xaxes(
+            tickvals=_idx_mun,
+            ticktext=df_serie_mun["label"].tolist(),
+            tickangle=45,
         )
-        plotly_dark(fig_mun, height=300, margin=dict(l=10, r=10, t=20, b=10))
+        plotly_dark(fig_mun, height=300, margin=dict(l=10, r=10, t=20, b=60))
         st.plotly_chart(fig_mun, width='stretch', key="mun_serie")
 
     # Composição do município no último bimestre disponível
@@ -367,7 +411,7 @@ def _aba_municipios():
 
 # ── Montagem ──────────────────────────────────────────────────────────────
 
-tab_estados, tab_municipios = st.tabs(["🗺️ Estados", "🏙️ Municípios"])
+tab_estados, tab_municipios = st.tabs(["🗺️ Estados", "🏙️ Capitais (protótipo)"])
 
 with tab_estados:
     _aba_estados()

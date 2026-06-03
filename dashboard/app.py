@@ -95,7 +95,7 @@ def _render_hero():
 
     sub_federal   = "" if not fed_c  else ""
     sub_estados   = "aguardando TI" if not est_c  else ""
-    sub_municipios= "aguardando TI" if not mun_c  else ""
+    sub_municipios= "aguardando TI" if not mun_c  else "26 capitais · protótipo"
 
     st.html(f"""
 <div style="
@@ -114,11 +114,15 @@ def _render_hero():
     font-size:58px;font-weight:800;color:{C['text']};
     font-family:'Courier New',monospace;letter-spacing:-1.5px;line-height:1.1;
   ">R$&nbsp;—</div>
-  <div style="font-size:12px;color:{C['text_muted']};margin-top:6px;margin-bottom:28px;">
-    Federal + Estados + Municípios &nbsp;·&nbsp;
+  <div style="font-size:12px;color:{C['text_muted']};margin-top:6px;margin-bottom:12px;">
+    Federal + Estados + Capitais (26) &nbsp;·&nbsp;
     Federal até {ult_fed} &nbsp;·&nbsp;
     Estados: {ult_est} &nbsp;·&nbsp;
-    Municípios: {ult_mun}
+    Capitais: {ult_mun}
+  </div>
+  <div style="font-size:10px;color:{C['text_muted']};opacity:0.7;margin-bottom:20px;">
+    ℹ️ Estados com bimestre pendente no SICONFI estimados por sazonalidade histórica &nbsp;·&nbsp;
+    Municípios: apenas capitais estaduais (dado completo em produção)
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;max-width:780px;margin:0 auto;">
@@ -141,7 +145,7 @@ def _render_hero():
     <div style="background:rgba(14,26,46,0.7);border:1px solid {C['border']};
                 border-radius:10px;padding:16px 12px;">
       <div style="font-size:9px;letter-spacing:2px;color:{C['text_muted']};
-                  text-transform:uppercase;margin-bottom:6px;">Municípios</div>
+                  text-transform:uppercase;margin-bottom:6px;">Capitais (26)</div>
       <div id="cnt-municipios" style="font-size:22px;font-weight:700;color:{C['accent']};
            font-family:'Courier New',monospace;">—</div>
       {'<div style="font-size:10px;color:#64748B;margin-top:4px;">'+sub_municipios+'</div>' if sub_municipios else ''}

@@ -1,9 +1,9 @@
 {
-  "gerado_em": "2026-05-29T18:54:29.503256+00:00",
-  "duracao_segundos": 1,
+  "gerado_em": "2026-06-03T14:02:06.927538+00:00",
+  "duracao_segundos": 0,
   "total": {
-    "taxa_por_segundo_rs": 136017.1266,
-    "acc_base_rs": 902189425586.45,
+    "taxa_por_segundo_rs": 142888.4257,
+    "acc_base_rs": 1112606213788.14,
     "start_ms": 1775001600000,
     "mes_referencia": "2026-04",
     "mes_referencia_fim": "2026-05",
@@ -24,14 +24,14 @@
   },
   "estados": {
     "_consolidado": {
-      "taxa_por_segundo_rs": 38387.88,
-      "acc_base_rs": 204748655900.63,
+      "taxa_por_segundo_rs": 45259.1791,
+      "acc_base_rs": 415165444102.32,
       "start_ms": 1777593600000,
       "bim_referencia": "2026-B3",
       "bim_referencia_fim": "2026-B4",
       "ultimo_dado": "2026-B2",
-      "ratio_rolling": 0.92536,
-      "previsao_total_rs": 407955678813.25
+      "ratio_rolling": 1.090996,
+      "previsao_total_rs": 480978348160.61
     },
     "AC": {
       "taxa_por_segundo_rs": 377.8493,

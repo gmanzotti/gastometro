@@ -436,17 +436,22 @@ def carregar_dados() -> dict:
     return dados
 
 
-@st.cache_resource(ttl=86400)
+@st.cache_data(ttl=86400)
 def carregar_geojson_estados() -> dict | None:
-    """Busca o GeoJSON simplificado dos estados brasileiros (IBGE Malhas API)."""
+    """Carrega GeoJSON dos estados: tenta arquivo local, depois API do IBGE."""
+    local = DATA_DIR / "estados_geojson.json"
+    if local.exists():
+        return json.loads(local.read_text(encoding="utf-8"))
     url = (
-        "https://servicodados.ibge.gov.br/api/v3/malhas/estados"
-        "?resolucao=2&formato=application/vnd.geo%2Bjson"
+        "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR"
+        "?resolucao=2&intrarregiao=UF&formato=application/vnd.geo%2Bjson"
     )
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url, timeout=15, verify=False)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        local.write_text(json.dumps(data), encoding="utf-8")
+        return data
     except Exception:
         return None
 
@@ -457,6 +462,9 @@ def calcular_ratio_investimento_estados(df_estados: pd.DataFrame) -> pd.DataFram
     """
     Retorna DataFrame com cod_ibge, uf, ente, invest_ratio (%), invest_milhoes,
     total_milhoes — usando despesas liquidadas até o bimestre mais recente disponível.
+
+    Usa o bimestre com maior cobertura de estados no ano mais recente, para evitar
+    que o mapa fique com apenas os poucos estados que enviaram o bimestre mais novo.
     """
     if df_estados.empty:
         return pd.DataFrame()
@@ -465,9 +473,11 @@ def calcular_ratio_investimento_estados(df_estados: pd.DataFrame) -> pd.DataFram
         df_estados["coluna"] == "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
     ].copy()
 
-    # Ano e bimestre mais recentes com dados
+    # Bimestre com maior cobertura (nº de estados distintos) no ano mais recente
     max_ano = df["ano"].max()
-    max_bim = df[df["ano"] == max_ano]["periodo"].max()
+    df_ano = df[df["ano"] == max_ano]
+    cobertura = df_ano.groupby("periodo")["cod_ibge"].nunique()
+    max_bim = int(cobertura.idxmax())
 
     df_rec = df[(df["ano"] == max_ano) & (df["periodo"] == max_bim)]
 
@@ -500,11 +510,16 @@ def calcular_serie_estado(
     coluna: str = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)",
 ) -> pd.DataFrame:
     """Retorna série temporal para um estado e conta específicos."""
-    df = df_estados[
-        (df_estados["cod_ibge"]  == cod_ibge) &
-        (df_estados["cod_conta"] == cod_conta) &
-        (df_estados["coluna"]    == coluna)
-    ].sort_values(["ano", "periodo"]).copy()
+    df = (
+        df_estados[
+            (df_estados["cod_ibge"]  == cod_ibge) &
+            (df_estados["cod_conta"] == cod_conta) &
+            (df_estados["coluna"]    == coluna)
+        ]
+        .groupby(["ano", "periodo"], as_index=False)["valor_milhoes"]
+        .sum()
+        .sort_values(["ano", "periodo"])
+    )
     df["label"] = df["ano"].astype(str) + "-B" + df["periodo"].astype(str)
     return df
 

@@ -164,6 +164,18 @@ def buscar_entes_estados() -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+    # O DF tem esfera='D' no /entes (não 'E'), mas seu RREO é válido e retorna dados
+    # completos. Adicionamos manualmente para garantir que seja sempre extraído.
+    if 53 not in estados["cod_ibge"].values:
+        df_df = df[df["cod_ibge"] == 53][["cod_ibge", "uf", "ente", "populacao"]].copy()
+        if not df_df.empty:
+            estados = (
+                pd.concat([estados, df_df], ignore_index=True)
+                .sort_values("cod_ibge")
+                .reset_index(drop=True)
+            )
+            log.info("DF adicionado manualmente (esfera='D' no SICONFI, cod_ibge=53)")
+
     log.info("Encontrados %d estados/DF", len(estados))
     return estados
 
