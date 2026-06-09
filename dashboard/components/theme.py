@@ -50,18 +50,20 @@ MES_LABELS = {
 
 # Texto de cada página para o navbar
 _NAV_PAGES = [
-    ("Início",      "/"),
-    ("Federal",     "/federal"),
-    ("Subnacional", "/subnacional"),
-    ("Projeções",   "/projecoes"),
+    ("Geral",      "/"),
+    ("Federal",    "/federal"),
+    ("Estadual",   "/estadual"),
+    ("Municipal",  "/municipal"),
+    ("Projeções",  "/projecoes"),
 ]
 
 # Mapeamento de active_page para href
 _PAGE_KEYS = {
-    "home":        "/",
-    "federal":     "/federal",
-    "subnacional": "/subnacional",
-    "projecoes":   "/projecoes",
+    "home":       "/",
+    "federal":    "/federal",
+    "estadual":   "/estadual",
+    "municipal":  "/municipal",
+    "projecoes":  "/projecoes",
 }
 
 
@@ -456,51 +458,116 @@ def carregar_geojson_estados() -> dict | None:
         return None
 
 
+@st.cache_data(ttl=86400, show_spinner="Carregando malha municipal…")
+def carregar_geojson_municipios() -> dict | None:
+    """Carrega GeoJSON de todos os municípios: arquivo local primeiro, depois IBGE."""
+    local = DATA_DIR / "municipios_geojson.json"
+    if local.exists():
+        return json.loads(local.read_text(encoding="utf-8"))
+    url = (
+        "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR"
+        "?resolucao=1&intrarregiao=municipio&formato=application/vnd.geo%2Bjson"
+    )
+    try:
+        r = requests.get(url, timeout=60, verify=False)
+        r.raise_for_status()
+        data = r.json()
+        local.write_text(json.dumps(data), encoding="utf-8")
+        return data
+    except Exception:
+        return None
+
+
 # ── Cálculos subnacionais ──────────────────────────────────────────────────
 
-def calcular_ratio_investimento_estados(df_estados: pd.DataFrame) -> pd.DataFrame:
+def _rolling12_siconfi(df_base: pd.DataFrame) -> pd.DataFrame:
     """
-    Retorna DataFrame com cod_ibge, uf, ente, invest_ratio (%), invest_milhoes,
-    total_milhoes — usando despesas liquidadas até o bimestre mais recente disponível.
+    Calcula invest_ratio em rolling 12 meses a partir de dados SICONFI bimestrais.
 
-    Usa o bimestre com maior cobertura de estados no ano mais recente, para evitar
-    que o mapa fique com apenas os poucos estados que enviaram o bimestre mais novo.
+    O SICONFI reporta valores ACUMULADOS desde janeiro ("ATÉ O BIMESTRE"), então
+    para obter um janela de 12 meses que não fique presa ao ciclo jan-bim usamos:
+
+        rolling_12m = B_max(ano_atual) + [B6(ano-1) − B_max(ano-1)]
+                    = gasto jan→bim_atual/2026 + gasto bim+1→dez/2025
+
+    Isso neutraliza a sazonalidade do investimento, que se concentra no fim do ano
+    (estados correm para executar orçamento antes de dezembro fechar).
+
+    Se dados do ano anterior não estiverem disponíveis para um ente, usa apenas o
+    período atual como fallback (sem rolling).
     """
+    max_ano = df_base["ano"].max()
+    cobertura = (
+        df_base[df_base["ano"] == max_ano]
+        .groupby("periodo")["cod_ibge"].nunique()
+    )
+    max_bim = int(cobertura.idxmax())
+    ano_ant = max_ano - 1
+
+    def _agregar(ano: int, bim: int) -> pd.DataFrame:
+        sub = df_base[(df_base["ano"] == ano) & (df_base["periodo"] == bim)]
+        inv = (
+            sub[sub["cod_conta"].isin({"Investimentos", "InversoesFinanceiras"})]
+            .groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"].sum()
+            .reset_index().rename(columns={"valor_milhoes": "inv"})
+        )
+        tot = (
+            sub[sub["cod_conta"] == "DespesasExcetoIntraOrcamentarias"]
+            .groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"].sum()
+            .reset_index().rename(columns={"valor_milhoes": "tot"})
+        )
+        return inv.merge(tot, on=["cod_ibge", "uf", "ente"], how="inner")
+
+    curr   = _agregar(max_ano, max_bim)   # jan→bim_max do ano atual
+    b6_ant = _agregar(ano_ant, 6)          # jan→dez do ano anterior (B6 = ano completo)
+    bx_ant = _agregar(ano_ant, max_bim)    # jan→bim_max do ano anterior (para subtrair)
+
+    m = (
+        curr
+        .merge(b6_ant.rename(columns={"inv": "inv_b6", "tot": "tot_b6"}),
+               on=["cod_ibge", "uf", "ente"], how="left")
+        .merge(bx_ant.rename(columns={"inv": "inv_bx", "tot": "tot_bx"}),
+               on=["cod_ibge", "uf", "ente"], how="left")
+    )
+
+    # Onde o complemento do ano anterior está disponível, aplica rolling 12m
+    tem_roll = m["inv_b6"].notna() & m["inv_bx"].notna()
+    m["invest_milhoes"] = m["inv"].where(
+        ~tem_roll, m["inv"] + m["inv_b6"] - m["inv_bx"]
+    )
+    m["total_milhoes"] = m["tot"].where(
+        ~tem_roll, m["tot"] + m["tot_b6"] - m["tot_bx"]
+    )
+
+    m = m[m["total_milhoes"] > 0].copy()
+    m["invest_ratio"] = (m["invest_milhoes"] / m["total_milhoes"] * 100).round(2)
+    m["ano"]     = max_ano
+    m["periodo"] = max_bim
+    return (
+        m[["cod_ibge", "uf", "ente", "invest_ratio",
+           "invest_milhoes", "total_milhoes", "ano", "periodo"]]
+        .sort_values("invest_ratio", ascending=False)
+    )
+
+
+def calcular_ratio_investimento_estados(df_estados: pd.DataFrame) -> pd.DataFrame:
+    """Ratio invest/total em rolling 12 meses para estados + DF."""
     if df_estados.empty:
         return pd.DataFrame()
-
     df = df_estados[
         df_estados["coluna"] == "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
     ].copy()
+    return _rolling12_siconfi(df)
 
-    # Bimestre com maior cobertura (nº de estados distintos) no ano mais recente
-    max_ano = df["ano"].max()
-    df_ano = df[df["ano"] == max_ano]
-    cobertura = df_ano.groupby("periodo")["cod_ibge"].nunique()
-    max_bim = int(cobertura.idxmax())
 
-    df_rec = df[(df["ano"] == max_ano) & (df["periodo"] == max_bim)]
-
-    invest = (
-        df_rec[df_rec["cod_conta"].isin({"Investimentos", "InversoesFinanceiras"})]
-        .groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"].sum()
-        .reset_index()
-        .rename(columns={"valor_milhoes": "invest_milhoes"})
-    )
-    total = (
-        df_rec[df_rec["cod_conta"] == "DespesasExcetoIntraOrcamentarias"]
-        .groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"].sum()
-        .reset_index()
-        .rename(columns={"valor_milhoes": "total_milhoes"})
-    )
-
-    merged = invest.merge(total, on=["cod_ibge", "uf", "ente"], how="inner")
-    merged["invest_ratio"] = (
-        merged["invest_milhoes"] / merged["total_milhoes"] * 100
-    ).round(2)
-    merged["ano"]    = max_ano
-    merged["periodo"] = max_bim
-    return merged.sort_values("invest_ratio", ascending=False)
+def calcular_ratio_investimento_municipios(df_municipios: pd.DataFrame) -> pd.DataFrame:
+    """Ratio invest/total em rolling 12 meses para municípios."""
+    if df_municipios.empty:
+        return pd.DataFrame()
+    df = df_municipios[
+        df_municipios["coluna"] == "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
+    ].copy()
+    return _rolling12_siconfi(df)
 
 
 def calcular_serie_estado(

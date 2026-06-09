@@ -58,11 +58,13 @@ CORREÇÕES IMPLEMENTADAS NESTA SESSÃO
 PRÓXIMOS PASSOS — CORREÇÕES PENDENTES
 --------------------------------------------------------------------------------
 
-[PENDENTE] Rodar pipeline de estados para extrair histórico do DF:
-           - Comando: python pipelines/estados/load.py
-           - Estimativa: ~30 min (só o DF, incremental)
-           - Notas: parquet atual não tem DF; o load.py já está corrigido
-           - Impacto esperado: +R$ 5-8 bi no acc_base dos estados (~B1/2026 DF)
+[FEITO] Rodar pipeline de estados para extrair histórico do DF:
+           - Executado em 09/06/2026; 65 combinações (DF 2024–2026) extraídas em ~2 min
+           - Parquet passou de 1.744 para 1.782 combinações (52.306 linhas)
+           - Correção adicional: verify=False + urllib3.disable_warnings() em
+             estados/load.py e municipios/load.py (proxy SSL FIESP)
+           - Impacto real: acc estados R$ 415 bi → R$ 436 bi (+R$ 21 bi do DF)
+           - Total consolidado no contador: R$ 1.133 bi (Federal + Estados + Capitais)
 
 [FEITO] Atualizar label "Municípios" no dashboard para "Capitais (26)":
         - dashboard/app.py: card hero, legenda do contador e nota metodológica
@@ -112,5 +114,93 @@ PENDENTES DE SESSÕES ANTERIORES
 
 [PENDENTE] Outros itens do backlog (dívida/PIB, arcabouço fiscal, etc.) —
            ver memory/project_backlog.md
+
+================================================================================
+
+=== Iniciando sessão de 09/06/2026 ===
+
+--------------------------------------------------------------------------------
+TAREFAS DA SESSÃO
+--------------------------------------------------------------------------------
+
+[FEITO] Corrigir SSL nos pipelines de estados e municípios:
+        - verify=False + urllib3.disable_warnings() em estados/load.py e municipios/load.py
+        - Causa: proxy da FIESP usa certificado self-signed
+
+[FEITO] Extrair dados históricos do DF (pipeline estados):
+        - 65 combinações (2024–B2/2026), ~2 min de execução
+        - acc estados: R$ 415 bi → R$ 436 bi; total consolidado: R$ 1.133 bi
+
+[PENDENTE] Decidir fase de despesa: liquidado (atual) vs pago (Gasto Brasil)?
+           - Recomendação: manter liquidado (metodologicamente mais correto)
+
+[EM ANDAMENTO] Refinar dashboard para se assemelhar ao site Gasto Brasil:
+               - Layout editorial, hierarquia visual, menos filtros, mais narrativa
+               - Streamlit rodando em http://localhost:8501 para referência
+
+================================================================================
+
+=== Iniciando sessão de 09/06/2026 (tarde) ===
+
+--------------------------------------------------------------------------------
+TAREFAS DA SESSÃO
+--------------------------------------------------------------------------------
+
+[FEITO] Ampliar granularidade dos pipelines estadual e municipal (9 contas):
+        - Adicionadas: PessoalEEncargosSociais, JurosEEncargosDaDivida,
+          OutrasDespesasCorrentes (antes só havia 6 contas)
+        - Arquivos: pipelines/estados/load.py, pipelines/municipios/load.py
+
+[FEITO] Implementar metodologia rolling 12 meses para invest_ratio subnacional:
+        - _rolling12_siconfi() em components/theme.py
+        - Neutraliza sazonalidade (investimento concentrado no fim do ano)
+        - calcular_ratio_investimento_estados() e _municipios() usam rolling
+
+[FEITO] Implementar rolling 12 meses para invest_ratio federal (RTN):
+        - _ratio_federal() em app.py usa rtn_soma_12m() em vez de ponto único
+        - Usa série 'Investimento' real das abas 1.3/1.3-A (não mais proxy)
+
+[FEITO] Corrigir alinhamento do Termômetro com CSS Grid:
+        - _linha_termometro() reescrita com display:grid, colunas absolutas (px)
+        - Fix hot-reload: --server.fileWatcherType poll (drive SMB não dispara eventos)
+
+[FEITO] Ajustes cosméticos na aba Geral (ex-Início):
+        - Renomeada de "Início" para "Geral" em _NAV_PAGES
+        - Disclaimer analítico adicionado antes do Termômetro (texto grande, negrito)
+        - Frase final sublinhada em linha separada, texto centralizado
+        - Disclaimer e Termômetro fundidos no mesmo bloco (sem espaço escuro)
+
+[FEITO] Dividir aba Subnacional em Estadual e Municipal:
+        - Criados: dashboard/pages/estadual.py e dashboard/pages/municipal.py
+        - Layout idêntico: coroplético → ranking → detalhe (série + composição)
+        - Composição agora mostra 6 categorias detalhadas (pessoal, juros, outras,
+          investimentos, inversões, amortização) — maior granularidade
+        - Municipal: choroplético sintético para todos os 5.570 municípios
+          (dados reais só das capitais; choroplético é protótipo visual)
+        - _NAV_PAGES atualizado; cards da Geral: 4 em vez de 3
+        - GeoJSON municipal baixado: data/municipios_geojson.json (53,5 MB)
+
+[FEITO] Re-extração do parquet estadual com 9 contas:
+        - Parquet antigo deletado; pipeline rodando (2024–2026, 405 combinações)
+        - Estimativa: ~14 min total
+
+[FEITO] Deletar parquet municipal antigo (6 contas) para re-extração:
+        - Pipeline municipal pendente de início (vide abaixo)
+
+--------------------------------------------------------------------------------
+PRÓXIMOS PASSOS
+--------------------------------------------------------------------------------
+
+[PENDENTE] Iniciar pipeline municipal completo (todos os ~5.570 municípios):
+           - EXTRAIR_TODOS=True, ANO_INICIO=2024 → estimativa ~20–25 h
+           - Precisa de máquina ligada durante a noite
+           - Comando: python pipelines/municipios/load.py
+
+[PENDENTE] Decidir fase de despesa: liquidado vs pago (não urgente)
+
+[PENDENTE] Aba Federal: adicionar mais visualizações (comparação mensal a/a,
+           gráfico de composição ao longo do tempo, etc.)
+
+[PENDENTE] Aba Projeções: revisar metodologia e expandir cenários
 
 ================================================================================

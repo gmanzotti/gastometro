@@ -39,8 +39,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import urllib3
 import pandas as pd
 import requests
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.settings import DATA_DIR
 
@@ -122,12 +124,15 @@ POP_MINIMA_COMPLETO = 50_000
 # ── Contas de despesa a extrair (idênticas ao pipeline de estados) ────────────
 # Confirmadas via API real para município de SP (cod_ibge=3550308, 2024, bim.1)
 CONTAS_DESPESA = {
-    "DespesasExcetoIntraOrcamentarias",
-    "DespesasCorrentes",
-    "DespesasDeCapital",
-    "Investimentos",
-    "InversoesFinanceiras",
-    "AmortizacaoDaDivida",
+    "DespesasExcetoIntraOrcamentarias",  # total consolidado
+    "DespesasCorrentes",                  # subtotal correntes
+    "PessoalEEncargosSociais",            # 1.1 — folha + encargos patronais
+    "JurosEEncargosDaDivida",             # 1.2 — juros e comissões da dívida
+    "OutrasDespesasCorrentes",            # 1.3 — custeio, transferências, subvenções
+    "DespesasDeCapital",                  # subtotal capital
+    "Investimentos",                      # 2.1 — obras e equipamentos
+    "InversoesFinanceiras",               # 2.2 — aquisição de ativos já existentes
+    "AmortizacaoDaDivida",                # 2.3 — pagamento do principal da dívida
 }
 
 COLUNAS_DESPESA = {
@@ -182,7 +187,7 @@ def buscar_entes_municipios() -> pd.DataFrame:
     # co_tipo_ente="E" retorna TODAS as ~5.600 entidades (estados + municípios);
     # o filtro real é esfera=="M" abaixo.
     log.info("Buscando lista completa de municípios no SICONFI...")
-    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30)
+    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30, verify=False)
     r.raise_for_status()
 
     df = pd.DataFrame(r.json()["items"])
@@ -236,7 +241,7 @@ def buscar_rreo_municipio(cod_ibge: int, ano: int, periodo: int,
 
     for tentativa in range(1, MAX_TENTATIVAS + 1):
         try:
-            r = requests.get(URL_RREO, params=params, timeout=30)
+            r = requests.get(URL_RREO, params=params, timeout=30, verify=False)
             r.raise_for_status()
             payload = r.json()
 

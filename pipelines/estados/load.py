@@ -66,8 +66,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import urllib3
 import pandas as pd
 import requests
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from config.settings import DATA_DIR
 
@@ -98,22 +100,25 @@ SALVAR_A_CADA = 100
 
 # ── Contas de despesa a extrair (confirmadas via API real — SP, 2024, bimestre 1) ──
 #
-# Estrutura de Despesas de Capital (Lei 4.320/1964, Art. 12):
+# Estrutura Lei 4.320/1964, Art. 12:
+#   DespesasCorrentes
+#   ├── PessoalEEncargosSociais      (§1º: folha de pagamento e encargos patronais)
+#   ├── JurosEEncargosDaDivida       (§2º: serviço da dívida — juros e comissões)
+#   └── OutrasDespesasCorrentes      (§3º: custeio, transferências, subvenções)
 #   DespesasDeCapital
-#   ├── Investimentos            (§4º: obras, equipamentos — INVESTIMENTO PÚBLICO)
-#   ├── InversoesFinanceiras     (§5º: aquisição de ativos já em uso — INVESTIMENTO PÚBLICO)
-#   └── AmortizacaoDaDivida      (§6º: devolução do principal da dívida — NÃO é investimento)
-#
-# "InversoesFinanceiras" inclui também as versões Intra (DespesasCorrentesIntra, etc.),
-# que representam transações dentro do mesmo nível de governo. Não as extraímos aqui
-# porque DespesasExcetoIntraOrcamentarias já exclui essas movimentações internas.
+#   ├── Investimentos                (§4º: obras e equipamentos — INVESTIMENTO PÚBLICO)
+#   ├── InversoesFinanceiras         (§5º: aquisição de ativos já em uso — INVESTIMENTO PÚBLICO)
+#   └── AmortizacaoDaDivida          (§6º: devolução do principal da dívida)
 CONTAS_DESPESA = {
     "DespesasExcetoIntraOrcamentarias",  # total consolidado (excluindo intra-orçamentário)
-    "DespesasCorrentes",                  # pessoal, custeio, juros
-    "DespesasDeCapital",                  # subtotal de capital (investimentos + amortização)
-    "Investimentos",                      # obras e equipamentos
-    "InversoesFinanceiras",               # aquisição de ativos já existentes
-    "AmortizacaoDaDivida",                # pagamento do principal da dívida
+    "DespesasCorrentes",                  # subtotal correntes
+    "PessoalEEncargosSociais",            # 1.1 — folha + encargos patronais
+    "JurosEEncargosDaDivida",             # 1.2 — juros e comissões da dívida
+    "OutrasDespesasCorrentes",            # 1.3 — custeio, transferências, subvenções
+    "DespesasDeCapital",                  # subtotal capital
+    "Investimentos",                      # 2.1 — obras e equipamentos
+    "InversoesFinanceiras",               # 2.2 — aquisição de ativos já existentes
+    "AmortizacaoDaDivida",                # 2.3 — pagamento do principal da dívida
 }
 
 # ── Estágios de execução a salvar (confirmados via API real) ───────────────────
@@ -150,7 +155,7 @@ def buscar_entes_estados() -> pd.DataFrame:
     Retorna DataFrame com: cod_ibge, uf, ente, populacao
     """
     log.info("Buscando lista de estados no SICONFI...")
-    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30)
+    r = requests.get(URL_ENTES, params={"co_tipo_ente": "E"}, timeout=30, verify=False)
     r.raise_for_status()
 
     df = pd.DataFrame(r.json()["items"])
@@ -223,7 +228,7 @@ def buscar_rreo_estado(cod_ibge: int, ano: int, periodo: int) -> pd.DataFrame:
 
     for tentativa in range(1, MAX_TENTATIVAS + 1):
         try:
-            r = requests.get(URL_RREO, params=params, timeout=30)
+            r = requests.get(URL_RREO, params=params, timeout=30, verify=False)
             r.raise_for_status()
             payload = r.json()
 

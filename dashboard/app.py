@@ -3,18 +3,17 @@ dashboard/app.py  —  Gastômetro FIESP · Página Inicial
 
 Estrutura da home:
   1. Navbar fixa
-  2. Hero: contador animado multi-esfera (Total / Federal / Estados / Municípios)
-  3. Termômetro de Investimento: proporção de cada R$ 100 gastos
-  4. KPIs de destaque do ano corrente
-  5. Cards de navegação para as demais seções
-  6. Rodapé
+  2. Hero: contador total animado + 3 sub-contadores (Federal / Estados / Municípios)
+  3. Termômetro de Investimento (largura total, 4 esferas)
+  4. Cards de navegação
+  5. Rodapé
 
 Como rodar:
   streamlit run dashboard/app.py
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -22,10 +21,12 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from components.theme import (
-    C, MES_LABELS, inject_css, render_navbar, render_footer,
-    fmt_bi, fmt_br, fmt_pct, plotly_dark,
-    carregar_dados, calcular_ratio_investimento_estados,
-    rtn_valor, rtn_soma_12m,
+    C, inject_css, render_navbar, render_footer,
+    fmt_br,
+    carregar_dados,
+    calcular_ratio_investimento_estados,
+    calcular_ratio_investimento_municipios,
+    rtn_soma_12m,
 )
 
 st.set_page_config(
@@ -37,21 +38,20 @@ st.set_page_config(
 inject_css()
 render_navbar("home")
 
-dados     = carregar_dados()
-df_rtn    = dados.get("rtn", pd.DataFrame())
-contador  = dados.get("contador", {})
-df_est    = dados.get("estados", pd.DataFrame())
-meta      = dados.get("meta_rtn", {})
+dados   = carregar_dados()
+df_rtn  = dados.get("rtn",        pd.DataFrame())
+contador= dados.get("contador",   {})
+df_est  = dados.get("estados",    pd.DataFrame())
+df_mun  = dados.get("municipios", pd.DataFrame())
 
-tem_rtn    = not df_rtn.empty
-tem_est    = not df_est.empty
-tem_cont   = bool(contador)
+tem_rtn = not df_rtn.empty
+tem_est = not df_est.empty
+tem_mun = not df_mun.empty
 
 
-# ── Hero: contador em tempo real ──────────────────────────────────────────
+# ── Hero: contador total + 3 sub-contadores animados ─────────────────────
 
-def _bloco_contador(label: str, chave: str) -> dict:
-    """Extrai acc_base_rs, taxa_por_segundo_rs, start_ms de contador[chave]."""
+def _bloco_contador(chave: str) -> dict:
     bloco = contador.get(chave, {})
     if isinstance(bloco, dict) and "_consolidado" in bloco:
         bloco = bloco["_consolidado"]
@@ -59,14 +59,12 @@ def _bloco_contador(label: str, chave: str) -> dict:
 
 
 def _render_hero():
-    total_c  = _bloco_contador("total",     "total")
-    fed_c    = _bloco_contador("federal",   "federal")
-    est_c    = _bloco_contador("_consol_e", "estados")
-    mun_c    = _bloco_contador("_consol_m", "municipios")
+    total_c = _bloco_contador("total")
+    fed_c   = _bloco_contador("federal")
+    est_c   = _bloco_contador("estados")
+    mun_c   = _bloco_contador("municipios")
 
-    # Usa total se disponível, senão federal
     ref_c = total_c if total_c else fed_c
-
     if not ref_c:
         st.info("Execute `python pipelines/contador_fiscal.py` para habilitar o contador.")
         return
@@ -80,109 +78,133 @@ def _render_hero():
     acc_fed   = fed_c.get("acc_base_rs", 0) if fed_c else 0
     taxa_fed  = fed_c.get("taxa_por_segundo_rs", 0) if fed_c else 0
     start_fed = fed_c.get("start_ms", start_ms) if fed_c else start_ms
+    ult_fed   = fed_c.get("ultimo_dado", "—") if fed_c else "—"
 
     acc_est   = est_c.get("acc_base_rs", 0) if est_c else 0
     taxa_est  = est_c.get("taxa_por_segundo_rs", 0) if est_c else 0
     start_est = est_c.get("start_ms", start_ms) if est_c else start_ms
+    ult_est   = est_c.get("ultimo_dado", "—") if est_c else "aguardando"
 
     acc_mun   = mun_c.get("acc_base_rs", 0) if mun_c else 0
     taxa_mun  = mun_c.get("taxa_por_segundo_rs", 0) if mun_c else 0
     start_mun = mun_c.get("start_ms", start_ms) if mun_c else start_ms
+    ult_mun   = mun_c.get("ultimo_dado", "—") if mun_c else "aguardando"
 
-    ult_fed   = fed_c.get("ultimo_dado", "—") if fed_c else "—"
-    ult_est   = est_c.get("ultimo_dado", "aguardando") if est_c else "aguardando"
-    ult_mun   = mun_c.get("ultimo_dado", "aguardando") if mun_c else "aguardando"
-
-    sub_federal   = "" if not fed_c  else ""
-    sub_estados   = "aguardando TI" if not est_c  else ""
-    sub_municipios= "aguardando TI" if not mun_c  else "26 capitais · protótipo"
+    # Label da esfera municipal reflete cobertura atual vs. produção
+    n_mun = df_mun["cod_ibge"].nunique() if tem_mun else 0
+    if n_mun > 500:
+        label_mun = "Municípios"
+        sub_mun   = f"{n_mun:,} municípios".replace(",", ".")
+    elif n_mun > 0:
+        label_mun = "Municípios"
+        sub_mun   = f"{n_mun} capitais · protótipo"
+    else:
+        label_mun = "Municípios"
+        sub_mun   = "aguardando dados"
 
     st.html(f"""
 <div style="
-    background: linear-gradient(135deg,{C['bg']} 0%,{C['bg3']} 100%);
+    background: linear-gradient(160deg, {C['bg']} 0%, {C['bg3']} 100%);
     border: 1px solid {C['border']};
-    border-radius: 16px;
-    padding: 36px 48px 28px;
+    border-radius: 20px;
+    padding: 44px 56px 40px;
     text-align: center;
-    margin-bottom: 4px;
 ">
-  <div style="font-size:11px;letter-spacing:3px;color:{C['accent']};
-              font-weight:700;text-transform:uppercase;margin-bottom:10px;">
-    Gastos Totais Acumulados do Setor Público — {ano_ref}
-  </div>
-  <div id="cnt-total" style="
-    font-size:58px;font-weight:800;color:{C['text']};
-    font-family:'Courier New',monospace;letter-spacing:-1.5px;line-height:1.1;
-  ">R$&nbsp;—</div>
-  <div style="font-size:12px;color:{C['text_muted']};margin-top:6px;margin-bottom:12px;">
-    Federal + Estados + Capitais (26) &nbsp;·&nbsp;
-    Federal até {ult_fed} &nbsp;·&nbsp;
-    Estados: {ult_est} &nbsp;·&nbsp;
-    Capitais: {ult_mun}
-  </div>
-  <div style="font-size:10px;color:{C['text_muted']};opacity:0.7;margin-bottom:20px;">
-    ℹ️ Estados com bimestre pendente no SICONFI estimados por sazonalidade histórica &nbsp;·&nbsp;
-    Municípios: apenas capitais estaduais (dado completo em produção)
+  <!-- Eyebrow -->
+  <div style="font-size:10px;letter-spacing:3.5px;color:{C['accent']};
+              font-weight:700;text-transform:uppercase;margin-bottom:16px;">
+    Gastos Acumulados do Setor Público Brasileiro — {ano_ref}
   </div>
 
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;max-width:780px;margin:0 auto;">
-    <div style="background:rgba(14,26,46,0.7);border:1px solid {C['border']};
-                border-radius:10px;padding:16px 12px;">
-      <div style="font-size:9px;letter-spacing:2px;color:{C['text_muted']};
-                  text-transform:uppercase;margin-bottom:6px;">Federal</div>
-      <div id="cnt-federal" style="font-size:22px;font-weight:700;color:{C['accent']};
-           font-family:'Courier New',monospace;">—</div>
-      {'<div style="font-size:10px;color:#64748B;margin-top:4px;">'+sub_federal+'</div>' if sub_federal else ''}
-    </div>
-    <div style="background:rgba(14,26,46,0.7);border:1px solid {C['border']};
-                border-radius:10px;padding:16px 12px;">
-      <div style="font-size:9px;letter-spacing:2px;color:{C['text_muted']};
-                  text-transform:uppercase;margin-bottom:6px;">Estados</div>
-      <div id="cnt-estados" style="font-size:22px;font-weight:700;color:{C['accent']};
-           font-family:'Courier New',monospace;">—</div>
-      {'<div style="font-size:10px;color:#64748B;margin-top:4px;">'+sub_estados+'</div>' if sub_estados else ''}
-    </div>
-    <div style="background:rgba(14,26,46,0.7);border:1px solid {C['border']};
-                border-radius:10px;padding:16px 12px;">
-      <div style="font-size:9px;letter-spacing:2px;color:{C['text_muted']};
-                  text-transform:uppercase;margin-bottom:6px;">Capitais (26)</div>
-      <div id="cnt-municipios" style="font-size:22px;font-weight:700;color:{C['accent']};
-           font-family:'Courier New',monospace;">—</div>
-      {'<div style="font-size:10px;color:#64748B;margin-top:4px;">'+sub_municipios+'</div>' if sub_municipios else ''}
-    </div>
+  <!-- Contador total -->
+  <div id="cnt-total" style="
+    font-size:66px;font-weight:800;color:{C['text']};
+    font-family:'Courier New',monospace;letter-spacing:-2px;line-height:1;
+    margin-bottom:16px;
+  ">R$&nbsp;—</div>
+
+  <div style="font-size:11px;color:{C['text_muted']};margin-bottom:32px;opacity:0.85;">
+    Federal · Estados + DF · Municípios &nbsp;·&nbsp;
+    Despesas liquidadas acumuladas no ano, projetadas ao segundo
+  </div>
+
+  <!-- Divisor -->
+  <div style="height:1px;
+    background:linear-gradient(90deg,transparent 0%,{C['border']} 20%,{C['border']} 80%,transparent 100%);
+    margin-bottom:32px;">
+  </div>
+
+  <div style="max-width:700px;margin:0 auto;border:1px solid {C['border']};
+              border-radius:10px;overflow:hidden;">
+    <table style="width:100%;border-collapse:collapse;background:{C['bg2']};">
+      <thead>
+        <tr style="background:{C['border']};">
+          <th style="padding:10px 20px;text-align:left;font-size:10px;letter-spacing:1.5px;
+                     text-transform:uppercase;color:{C['text_dim']};font-weight:600;">
+            Entes Federativos
+          </th>
+          <th style="padding:10px 20px;text-align:right;font-size:10px;letter-spacing:1.5px;
+                     text-transform:uppercase;color:{C['text_dim']};font-weight:600;">
+            Total de Gastos no Ano (R$)
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid {C['border']};">
+          <td style="padding:14px 20px;">
+            <div style="font-size:15px;font-weight:600;color:{C['text']};">Governo Federal</div>
+            <div style="font-size:10px;color:{C['text_muted']};margin-top:2px;">até {ult_fed}</div>
+          </td>
+          <td style="padding:14px 20px;text-align:right;vertical-align:middle;">
+            <span id="cnt-federal" style="font-size:17px;font-weight:700;color:{C['accent']};
+                  font-family:'Courier New',monospace;white-space:nowrap;">—</span>
+          </td>
+        </tr>
+        <tr style="border-bottom:1px solid {C['border']};background:rgba(30,58,95,0.2);">
+          <td style="padding:14px 20px;">
+            <div style="font-size:15px;font-weight:600;color:{C['text']};">Estados + DF</div>
+            <div style="font-size:10px;color:{C['text_muted']};margin-top:2px;">{ult_est}</div>
+          </td>
+          <td style="padding:14px 20px;text-align:right;vertical-align:middle;">
+            <span id="cnt-estados" style="font-size:17px;font-weight:700;color:{C['accent']};
+                  font-family:'Courier New',monospace;white-space:nowrap;">—</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 20px;">
+            <div style="font-size:15px;font-weight:600;color:{C['text']};">{label_mun}</div>
+            <div style="font-size:10px;color:{C['text_muted']};margin-top:2px;">{sub_mun}</div>
+          </td>
+          <td style="padding:14px 20px;text-align:right;vertical-align:middle;">
+            <span id="cnt-municipios" style="font-size:17px;font-weight:700;color:{C['accent']};
+                  font-family:'Courier New',monospace;white-space:nowrap;">—</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
 <script>
 (function() {{
   const spheres = {{
-    "total":      {{ acc: {acc_total:.2f},  taxa: {taxa_tot:.4f},  start: {start_ms}  }},
-    "federal":    {{ acc: {acc_fed:.2f},    taxa: {taxa_fed:.4f},  start: {start_fed} }},
-    "estados":    {{ acc: {acc_est:.2f},    taxa: {taxa_est:.4f},  start: {start_est} }},
-    "municipios": {{ acc: {acc_mun:.2f},    taxa: {taxa_mun:.4f},  start: {start_mun} }}
+    "total":      {{ acc: {acc_total:.2f}, taxa: {taxa_tot:.4f},  start: {start_ms}  }},
+    "federal":    {{ acc: {acc_fed:.2f},   taxa: {taxa_fed:.4f},  start: {start_fed} }},
+    "estados":    {{ acc: {acc_est:.2f},   taxa: {taxa_est:.4f},  start: {start_est} }},
+    "municipios": {{ acc: {acc_mun:.2f},   taxa: {taxa_mun:.4f},  start: {start_mun} }}
   }};
 
   function fmtBr(n) {{
-    return n.toLocaleString('pt-BR', {{minimumFractionDigits:2,maximumFractionDigits:2}});
+    return n.toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}});
   }}
-  function fmtBi(n) {{
-    if (n >= 1e12) return 'R$ ' + (n/1e12).toLocaleString('pt-BR',{{minimumFractionDigits:1,maximumFractionDigits:1}}) + ' tri';
-    if (n >= 1e9)  return 'R$ ' + (n/1e9).toLocaleString('pt-BR',{{minimumFractionDigits:1,maximumFractionDigits:1}}) + ' bi';
-    return 'R$ ' + (n/1e6).toLocaleString('pt-BR',{{minimumFractionDigits:1,maximumFractionDigits:1}}) + ' mi';
-  }}
-
   function update() {{
     const now = Date.now();
     for (const [id, c] of Object.entries(spheres)) {{
       const elapsed = Math.max(0, (now - c.start) / 1000);
-      const total   = c.acc + elapsed * c.taxa;
+      const val     = c.acc + elapsed * c.taxa;
       const el      = document.getElementById('cnt-' + id);
       if (!el) continue;
-      if (id === 'total') {{
-        el.innerHTML = 'R$ ' + fmtBr(total);
-      }} else {{
-        el.innerHTML = c.taxa > 0 ? fmtBi(total) : '—';
-      }}
+      el.innerHTML = (c.taxa > 0 || id === 'total') ? 'R$&nbsp;' + fmtBr(val) : '—';
     }}
   }}
   setInterval(update, 100);
@@ -192,167 +214,186 @@ def _render_hero():
 """, unsafe_allow_javascript=True)
 
 
-# ── Termômetro de investimento ────────────────────────────────────────────
+# ── Termômetro de investimento — largura total, 4 esferas ────────────────
+
+def _ratio_esfera(ratio_df: pd.DataFrame | None) -> tuple | None:
+    """(invest_pct, invest_mi, total_mi) a partir de um DataFrame de ratio por ente."""
+    if ratio_df is None or ratio_df.empty:
+        return None
+    inv = ratio_df["invest_milhoes"].sum()
+    tot = ratio_df["total_milhoes"].sum()
+    if tot == 0:
+        return None
+    return round(inv / tot * 100, 1), inv, tot
+
+
+def _ratio_federal(df: pd.DataFrame) -> tuple | None:
+    """(invest_pct, invest_mi, total_mi) usando RTN — rolling 12 meses, dado real de investimento.
+
+    Usa a série 'Investimento' das abas 1.3/1.3-A da RTN (investimento público em obras
+    e equipamentos), não mais a proxy de Discricionárias que incluía custeio discricionário.
+    """
+    if df.empty:
+        return None
+    ano  = int(df["ano"].max())
+    mes  = int(df[df["ano"] == ano]["mes"].max())
+    col  = "corrente_milhoes"
+    tot  = rtn_soma_12m(df, "4. ",          ano, mes, col)
+    inv  = rtn_soma_12m(df, "Investimento", ano, mes, col)
+    if tot is None or inv is None or tot == 0:
+        return None
+    return round(inv / tot * 100, 1), inv, tot
+
+
+def _ratio_total(*ratios: tuple | None) -> tuple | None:
+    """Média ponderada de todas as esferas disponíveis."""
+    inv_sum = sum(r[1] for r in ratios if r is not None)
+    tot_sum = sum(r[2] for r in ratios if r is not None)
+    if tot_sum == 0:
+        return None
+    return round(inv_sum / tot_sum * 100, 1), inv_sum, tot_sum
+
+
+def _linha_termometro(
+    label: str,
+    nota: str,
+    ratio: tuple | None,
+    destaque: bool = False,
+) -> str:
+    """Retorna HTML de uma linha do termômetro (label | invest% | barra | correntes%)."""
+    bar_h  = "48px" if destaque else "36px"
+    n_size = "26px" if destaque else "20px"
+    l_size = "15px" if destaque else "13px"
+    mb     = "24px" if destaque else "14px"
+    fw     = "700"  if destaque else "600"
+
+    # Grid com coluna de label explícita: main=200px, sub-entes=232px
+    # Isso garante que invest% dos sub-entes fique exatamente 32px à direita do consolidado
+    col1   = "200px" if destaque else "232px"
+    grid   = f"display:grid;grid-template-columns:{col1} 80px 1fr 80px;align-items:center;gap:20px;"
+    border = f"border-left:3px solid {C['accent']};padding-left:8px;" if destaque else "padding-left:32px;"
+
+    if ratio is None:
+        return (
+            f'<div style="margin-bottom:{mb};{grid}opacity:0.4;">'
+            f'<div style="{border}font-size:{l_size};font-weight:{fw};color:{C["text"]}">{label}</div>'
+            f'<div style="grid-column:2/5;font-size:12px;color:{C["text_muted"]};text-align:center;">dados não disponíveis</div>'
+            f'</div>'
+        )
+
+    invest_pct   = ratio[0]
+    corrente_pct = round(100 - invest_pct, 1)
+
+    return (
+        f'<div style="margin-bottom:{mb};{grid}">'
+        f'<div style="{border}">'
+        f'<div style="font-size:{l_size};font-weight:{fw};color:{C["text"]};line-height:1.2;">{label}</div>'
+        f'<div style="font-size:10px;color:{C["text_muted"]};margin-top:3px;line-height:1.4;">{nota}</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div style="font-size:{n_size};font-weight:800;color:{C["investimento"]};'
+        f'font-family:\'Courier New\',monospace;line-height:1;">{fmt_br(invest_pct, 1)}%</div>'
+        f'<div style="font-size:9px;color:{C["text_muted"]};margin-top:2px;">investimento</div>'
+        f'</div>'
+        f'<div style="height:{bar_h};border-radius:8px;overflow:hidden;display:flex;'
+        f'border:1px solid {C["border"]};">'
+        f'<div style="width:{invest_pct:.2f}%;background:linear-gradient(90deg,#14532d,{C["investimento"]});min-width:4px;"></div>'
+        f'<div style="flex:1;background:linear-gradient(90deg,{C["corrente"]},#7f1d1d);"></div>'
+        f'</div>'
+        f'<div>'
+        f'<div style="font-size:{n_size};font-weight:800;color:{C["corrente"]};'
+        f'font-family:\'Courier New\',monospace;line-height:1;">{fmt_br(corrente_pct, 1)}%</div>'
+        f'<div style="font-size:9px;color:{C["text_muted"]};margin-top:2px;">correntes</div>'
+        f'</div>'
+        f'</div>'
+    )
+
 
 def _render_termometro():
-    st.markdown(
-        f"<div style='font-size:13px;font-weight:600;color:{C['text']};"
-        "margin-bottom:4px;margin-top:8px;'>Termômetro de Investimento</div>",
-        unsafe_allow_html=True,
+    ratio_est = calcular_ratio_investimento_estados(df_est) if tem_est else None
+    ratio_mun = calcular_ratio_investimento_municipios(df_mun) if tem_mun else None
+
+    r_est = _ratio_esfera(ratio_est)
+    r_mun = _ratio_esfera(ratio_mun)
+    r_fed = _ratio_federal(df_rtn) if tem_rtn else None
+    r_tot = _ratio_total(r_fed, r_est, r_mun)
+
+    # Notas de fonte para cada linha
+    nota_tot = "Setor público consolidado · rolling 12 meses"
+    nota_fed = "Fonte: RTN/STN · abas 1.3/1.3-A · rolling 12 meses"
+    if ratio_est is not None and not ratio_est.empty:
+        _ano_e = int(ratio_est["ano"].iloc[0])
+        _bim_e = int(ratio_est["periodo"].iloc[0])
+        nota_est = f"Fonte: SICONFI · rolling 12m até {_ano_e}-B{_bim_e} · {len(ratio_est)} estados + DF"
+    else:
+        nota_est = "Fonte: SICONFI · dados não disponíveis"
+    if ratio_mun is not None and not ratio_mun.empty:
+        _ano_m = int(ratio_mun["ano"].iloc[0])
+        _bim_m = int(ratio_mun["periodo"].iloc[0])
+        _n_mun = int(df_mun["cod_ibge"].nunique()) if tem_mun else 0
+        escopo = f"{_n_mun:,} municípios".replace(",", ".") if _n_mun > 500 else f"{_n_mun} capitais (protótipo)"
+        nota_mun = f"Fonte: SICONFI · rolling 12m até {_ano_m}-B{_bim_m} · {escopo}"
+    else:
+        nota_mun = "Fonte: SICONFI · dados não disponíveis"
+
+    linhas = (
+        _linha_termometro("Setor Público Total", nota_tot, r_tot, destaque=True)
+        + f'<div style="height:1px;background:rgba(30,58,95,0.5);margin:8px 0 20px 0;"></div>'
+        + _linha_termometro("Governo Federal",  nota_fed, r_fed)
+        + _linha_termometro("Estados + DF",     nota_est, r_est)
+        + _linha_termometro("Municípios",        nota_mun, r_mun)
     )
-    st.caption(
-        "De cada R$ 100 gastos pelo setor público, quanto vai para investimento "
-        "(obras e equipamentos) vs. despesas correntes (custeio, previdência, pessoal)."
+
+    html = (
+        f'<style>*{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
+        f'box-sizing:border-box;margin:0;padding:0;}}body{{background:transparent;}}</style>'
+        f'<div style="background:{C["bg2"]};border:1px solid {C["border"]};'
+        f'border-radius:16px;padding:36px 44px;">'
+        f'<div style="border-left:4px solid {C["accent"]};padding-left:24px;margin-bottom:36px;">'
+        f'<p style="font-size:17px;line-height:1.85;color:{C["text"]};font-weight:700;'
+        f'text-align:center;margin:0;">'
+        f'Quando o governo gasta mais do que arrecada, quem paga a conta é a sociedade — '
+        f'na forma de juros mais altos, crédito mais caro e menos investimento em infraestrutura, '
+        f'saúde e educação. O descontrole das contas públicas funciona como um freio na economia: '
+        f'os juros aumentam, o empreendedor hesita em investir, o trabalhador vê seus '
+        f'financiamentos encarecerem e o país como um todo perde competitividade. '
+        f'O equilíbrio fiscal não é um fim em si mesmo — é o que garante ao Estado e ao '
+        f'setor privado a capacidade de investir no futuro, condição para o crescimento econômico '
+        f'e a geração de empregos sustentáveis. Sem espaço para investir, o país cresce menos, '
+        f'gera menos empregos e oferece menos oportunidades à sua população.'
+        f'</p>'
+        f'<p style="font-size:17px;line-height:1.85;color:{C["text"]};font-weight:700;'
+        f'text-align:center;text-decoration:underline;margin:16px 0 0 0;">'
+        f'A disciplina fiscal não penaliza a sociedade: ela a protege.'
+        f'</p>'
+        f'</div>'
+        f'<div style="margin-bottom:28px;">'
+        f'<div style="font-size:10px;letter-spacing:3px;color:{C["accent"]};font-weight:700;'
+        f'text-transform:uppercase;margin-bottom:8px;">Termômetro de Investimento</div>'
+        f'<div style="font-size:20px;font-weight:700;color:{C["text"]};margin-bottom:6px;">'
+        f'Composição do Gasto Público</div>'
+        f'<div style="font-size:13px;color:{C["text_dim"]};line-height:1.6;max-width:680px;">'
+        f'De cada R$&nbsp;100 gastos pelo setor público, quanto vai para '
+        f'<span style="color:{C["investimento"]};font-weight:600;">investimento produtivo</span>'
+        f' (obras e equipamentos) versus '
+        f'<span style="color:{C["corrente"]};font-weight:600;">despesas correntes e obrigatórias</span>'
+        f' (pessoal, previdência, juros)?</div>'
+        f'</div>'
+        f'<div style="display:grid;grid-template-columns:200px 80px 1fr 80px;gap:20px;'
+        f'margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid {C["border"]};">'
+        f'<div style="font-size:10px;color:{C["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Esfera</div>'
+        f'<div style="text-align:right;font-size:10px;color:{C["investimento"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Investimento</div>'
+        f'<div style="text-align:center;font-size:10px;color:{C["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Proporção</div>'
+        f'<div style="font-size:10px;color:{C["corrente"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Correntes</div>'
+        f'</div>'
+        f'{linhas}'
+        f'</div>'
     )
-
-    if tem_est:
-        ratio_df = calcular_ratio_investimento_estados(df_est)
-        if not ratio_df.empty:
-            invest_pct  = ratio_df["invest_ratio"].mean()
-            corrente_pct = 100 - invest_pct
-            # Comparação com ano anterior
-            ano_max = df_est["ano"].max()
-            ratio_ant = None
-            if ano_max > df_est["ano"].min():
-                df_est_ant = df_est[df_est["ano"] == ano_max - 1]
-                if not df_est_ant.empty:
-                    ratio_ant_df = calcular_ratio_investimento_estados(
-                        df_est[df_est["ano"] <= ano_max - 1]
-                    )
-                    if not ratio_ant_df.empty:
-                        ratio_ant = ratio_ant_df["invest_ratio"].mean()
-
-            delta_txt = ""
-            if ratio_ant is not None:
-                diff = invest_pct - ratio_ant
-                cor  = C["positive"] if diff >= 0 else C["negative"]
-                sinal = "+" if diff >= 0 else ""
-                delta_txt = (
-                    f'<span style="font-size:11px;color:{cor};margin-left:12px;">'
-                    f'{sinal}{fmt_br(diff, 1)} p.p. vs. ano anterior</span>'
-                )
-
-            _termometro_html(invest_pct, corrente_pct, delta_txt, "Estados")
-            return
-
-    if tem_rtn:
-        # Proxy federal: Discricionárias / Total
-        anos_disp = sorted(df_rtn["ano"].unique(), reverse=True)
-        if not anos_disp:
-            _termometro_placeholder()
-            return
-        ano = anos_disp[0]
-        meses_disp = sorted(df_rtn[df_rtn["ano"] == ano]["mes"].unique(), reverse=True)
-        if not meses_disp:
-            _termometro_placeholder()
-            return
-        mes = meses_disp[0]
-
-        total_v = rtn_valor(df_rtn, "4. ",   ano, mes, "corrente_milhoes")
-        disc_v  = rtn_valor(df_rtn, "4.4.2", ano, mes, "corrente_milhoes")
-
-        if total_v and disc_v and total_v > 0:
-            invest_pct   = disc_v / total_v * 100
-            corrente_pct = 100 - invest_pct
-            nota = "Proxy: Discricionárias / Despesa Total (RTN federal)"
-            _termometro_html(invest_pct, corrente_pct, "", nota)
-            return
-
-    _termometro_placeholder()
-
-
-def _termometro_html(invest_pct: float, corrente_pct: float, delta_txt: str, nota: str):
-    st.markdown(f"""
-<div style="margin:8px 0 4px 0;">
-  <div style="display:flex;align-items:center;margin-bottom:6px;">
-    <span style="font-size:24px;font-weight:800;color:{C['investimento']};">
-      {fmt_br(invest_pct, 1)}%
-    </span>
-    <span style="font-size:13px;color:{C['text_dim']};margin-left:8px;">Investimento</span>
-    {delta_txt}
-  </div>
-  <div style="width:100%;height:44px;border-radius:8px;overflow:hidden;
-              display:flex;border:1px solid {C['border']};">
-    <div style="width:{invest_pct:.2f}%;
-                background:linear-gradient(90deg,#166534,{C['investimento']});
-                display:flex;align-items:center;justify-content:center;
-                min-width:60px;padding:0 8px;">
-      <span style="color:white;font-weight:700;font-size:12px;white-space:nowrap;">
-        R$ {fmt_br(invest_pct, 1)} de cada R$ 100
-      </span>
-    </div>
-    <div style="flex:1;
-                background:linear-gradient(90deg,{C['corrente']},#7f1d1d);
-                display:flex;align-items:center;justify-content:center;padding:0 8px;">
-      <span style="color:white;font-weight:700;font-size:12px;white-space:nowrap;">
-        Corrente &amp; Obrigatório: {fmt_br(corrente_pct, 1)}%
-      </span>
-    </div>
-  </div>
-  <div style="font-size:10px;color:{C['text_muted']};margin-top:4px;">{nota}</div>
-</div>
-""", unsafe_allow_html=True)
-
-
-def _termometro_placeholder():
-    st.info("Dados subnacionais ainda não disponíveis. Execute os pipelines de estados e municípios.")
-
-
-# ── KPIs do ano ──────────────────────────────────────────────────────────
-
-def _render_kpis():
-    if not tem_rtn:
-        return
-    anos_disp = sorted(df_rtn["ano"].unique(), reverse=True)
-    if not anos_disp:
-        return
-    ano = anos_disp[0]
-    meses_disp = sorted(df_rtn[df_rtn["ano"] == ano]["mes"].unique(), reverse=True)
-    if not meses_disp:
-        return
-    mes = meses_disp[0]
-
-    col = "corrente_milhoes"
-
-    def v(p):  return rtn_valor(df_rtn, p, ano, mes, col)
-    def d(p):
-        at = rtn_valor(df_rtn, p, ano, mes, col)
-        an = rtn_valor(df_rtn, p, ano - 1, mes, col)
-        if at is None or an is None or an == 0:
-            return None
-        return round((at - an) / abs(an) * 100, 1)
-    def ds(val):
-        if val is None:
-            return None
-        return f"{'+' if val >= 0 else ''}{fmt_br(val, 1)}% a/a"
-
-    periodo = f"{MES_LABELS.get(mes, mes)}/{ano}"
-    st.markdown(
-        f"<div class='kpi-sub'>Governo Federal — {periodo}</div>",
-        unsafe_allow_html=True,
-    )
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Receita Líquida", fmt_bi(v("3. ")), delta=ds(d("3. ")))
-    with c2:
-        st.metric("Despesa Total",   fmt_bi(v("4. ")), delta=ds(d("4. ")))
-    with c3:
-        vp = v("5. ")
-        st.metric(
-            "Result. Primário",
-            fmt_bi(vp),
-            delta=ds(d("5. ")),
-            delta_color="normal",
-            help="Receita Líquida - Despesa Total. Negativo = déficit.",
-        )
-    with c4:
-        st.metric(
-            "Discricionárias",
-            fmt_bi(v("4.4.2")),
-            delta=ds(d("4.4.2")),
-            delta_color="inverse",
-            help="Proxy para investimento/gastos controláveis no orçamento federal.",
-        )
+    st.html(html)
 
 
 # ── Cards de navegação ────────────────────────────────────────────────────
@@ -364,14 +405,16 @@ def _render_nav_cards():
         unsafe_allow_html=True,
     )
     cards = [
-        ("/federal",     "📊", "Federal",
+        ("/federal",   "📊", "Federal",
          "Receita, despesa e resultado primário. Composição dos gastos e alertas de anomalias."),
-        ("/subnacional", "🗺️", "Subnacional",
-         "Gastos e investimentos dos 26 estados, DF e municípios. Mapa comparativo."),
-        ("/projecoes",   "🔭", "Projeções",
+        ("/estadual",  "🗺️", "Estadual",
+         "Gastos e investimentos dos 26 estados e DF. Mapa comparativo por UF."),
+        ("/municipal", "🏙️", "Municipal",
+         "Gastos das capitais estaduais. Mapa municipal com projeção de cobertura total."),
+        ("/projecoes", "🔭", "Projeções",
          "Trajetória fiscal projetada pelos próximos anos. Cenários de ajuste interativos."),
     ]
-    cols = st.columns(3)
+    cols = st.columns(4)
     for (href, icone, titulo, desc), col in zip(cards, cols):
         with col:
             st.markdown(f"""
@@ -398,11 +441,7 @@ _render_hero()
 
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 
-col_left, col_right = st.columns([1, 1])
-with col_left:
-    _render_termometro()
-with col_right:
-    _render_kpis()
+_render_termometro()
 
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 
