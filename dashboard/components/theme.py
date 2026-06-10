@@ -622,6 +622,115 @@ def rtn_delta_yoy(
     return round((atual - ant) / abs(ant) * 100, 1)
 
 
+# ── Cálculos scatter e categorias ─────────────────────────────────────────
+
+def calcular_scatter_correntes_invest(
+    df: pd.DataFrame,
+    coluna: str = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)",
+) -> pd.DataFrame:
+    """Rolling 12 m: correntes, invest e total por entidade — para scatter do elemento 4."""
+    df_f = df[df["coluna"] == coluna].copy()
+    if df_f.empty:
+        return pd.DataFrame()
+
+    max_ano = df_f["ano"].max()
+    cobertura = df_f[df_f["ano"] == max_ano].groupby("periodo")["cod_ibge"].nunique()
+    max_bim = int(cobertura.idxmax())
+    ano_ant = max_ano - 1
+
+    def _agg(ano: int, bim: int, contas: set) -> pd.DataFrame:
+        sub = df_f[
+            (df_f["ano"] == ano) & (df_f["periodo"] == bim) &
+            (df_f["cod_conta"].isin(contas))
+        ]
+        return (
+            sub.groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"]
+            .sum().reset_index()
+        )
+
+    def _roll(contas: set, col: str) -> pd.DataFrame:
+        curr   = _agg(max_ano, max_bim, contas).rename(columns={"valor_milhoes": "curr"})
+        b6_ant = _agg(ano_ant, 6,       contas).rename(columns={"valor_milhoes": "b6"})
+        bx_ant = _agg(ano_ant, max_bim, contas).rename(columns={"valor_milhoes": "bx"})
+        m = (
+            curr
+            .merge(b6_ant[["cod_ibge", "b6"]], on="cod_ibge", how="left")
+            .merge(bx_ant[["cod_ibge", "bx"]], on="cod_ibge", how="left")
+        )
+        tem = m["b6"].notna() & m["bx"].notna()
+        m[col] = m["curr"].where(~tem, m["curr"] + m["b6"] - m["bx"])
+        return m[["cod_ibge", "uf", "ente", col]]
+
+    correntes = _roll({"DespesasCorrentes"}, "correntes_milhoes")
+    invest    = _roll({"Investimentos", "InversoesFinanceiras"}, "invest_milhoes")
+    total     = _roll({"DespesasExcetoIntraOrcamentarias"}, "total_milhoes")
+
+    m = (
+        correntes
+        .merge(invest[["cod_ibge", "invest_milhoes"]], on="cod_ibge", how="inner")
+        .merge(total[["cod_ibge", "total_milhoes"]],   on="cod_ibge", how="inner")
+    )
+    m = m[m["total_milhoes"] > 0].copy()
+    m["invest_ratio"]    = (m["invest_milhoes"]  / m["total_milhoes"] * 100).round(2)
+    m["correntes_share"] = (m["correntes_milhoes"] / m["total_milhoes"] * 100).round(2)
+    m["ano"]     = max_ano
+    m["periodo"] = max_bim
+    return m.sort_values("invest_ratio", ascending=False).reset_index(drop=True)
+
+
+def calcular_categorias_rolling(
+    df: pd.DataFrame,
+    cod_ibge_list: list | None,
+    coluna: str,
+    ratio_rolling: float = 1.0,
+) -> pd.DataFrame:
+    """
+    Acumulado por categoria no último bimestre × ratio_rolling para projeção anual.
+    cod_ibge_list=None → consolida todos os entes.
+    """
+    _CATS = [
+        ("PessoalEEncargosSociais", "Pessoal e Encargos"),
+        ("JurosEEncargosDaDivida",  "Juros da Dívida"),
+        ("OutrasDespesasCorrentes", "Outras Correntes"),
+        ("Investimentos",           "Investimentos"),
+        ("InversoesFinanceiras",    "Inversões Financeiras"),
+        ("AmortizacaoDaDivida",     "Amort. Dívida"),
+    ]
+    contas_set = {c for c, _ in _CATS}
+
+    df_f = df[df["coluna"] == coluna].copy()
+    if cod_ibge_list is not None:
+        df_f = df_f[df_f["cod_ibge"].isin(cod_ibge_list)]
+    if df_f.empty:
+        return pd.DataFrame()
+
+    max_ano = df_f["ano"].max()
+    max_bim = int(
+        df_f[df_f["ano"] == max_ano]
+        .groupby("periodo")["cod_ibge"].nunique()
+        .idxmax()
+    )
+    df_bim = df_f[
+        (df_f["ano"] == max_ano) &
+        (df_f["periodo"] == max_bim) &
+        (df_f["cod_conta"].isin(contas_set))
+    ]
+    if df_bim.empty:
+        return pd.DataFrame()
+
+    df_agg = df_bim.groupby("cod_conta")["valor_milhoes"].sum().reset_index()
+    df_agg["valor_projetado"] = df_agg["valor_milhoes"] * ratio_rolling
+    nome_map = dict(_CATS)
+    df_agg["nome"] = df_agg["cod_conta"].map(nome_map)
+    df_agg["ano"]     = max_ano
+    df_agg["periodo"] = max_bim
+    return (
+        df_agg[df_agg["nome"].notna()]
+        .sort_values("valor_projetado", ascending=True)
+        .reset_index(drop=True)
+    )
+
+
 # ── Interno ────────────────────────────────────────────────────────────────
 
 def _logo_b64() -> str:

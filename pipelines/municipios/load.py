@@ -60,7 +60,7 @@ URL_RREO  = "https://apidatalake.tesouro.gov.br/ords/siconfi/tt/rreo"
 # ── Modo de extração ──────────────────────────────────────────────────────────
 # False → apenas as 27 capitais (protótipo, ~35 min)
 # True  → todos os ~5.571 municípios (produção, ~4,5 dias na VM)
-EXTRAIR_TODOS = True
+EXTRAIR_TODOS = False
 
 # ── Modo de teste por amostra ─────────────────────────────────────────────────
 # Quando EXTRAIR_TODOS=True e AMOSTRA_N > 0, extrai uma amostra aleatória de

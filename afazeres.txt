@@ -140,6 +140,43 @@ TAREFAS DA SESSÃO
 
 ================================================================================
 
+=== Iniciando sessão de 10/06/2026 ===
+
+--------------------------------------------------------------------------------
+TAREFAS DA SESSÃO
+--------------------------------------------------------------------------------
+
+[FEITO] Reextrair pipeline municipal (capitais, 9 contas, 2024–2026):
+        - EXTRAIR_TODOS=False; 816 s; 15.347 linhas, 364 combinações
+        - Decisão: sem séries temporais no painel subnacional; só situação atual
+
+[FEITO] Redesenhar abas Estadual e Municipal com 5 elementos fixos:
+        Elemento 1: seletor de estado (+ município na aba municipal), default=Consolidado
+        Elemento 2: contador animado JS idêntico ao da aba Geral (acc + taxa/s)
+                    - Label corrigida: "Projetado até Bx: R$ Y bi"
+                      (previsao_total_rs = B3+B4 projetados, não o ano todo)
+                    - Fix flickering: window._cntEstInterval / window._cntMunInterval
+                      cancelam timer anterior antes de criar novo (JS roda no window pai)
+        Elemento 3: coroplético zoom 2.5 (país todo visível por default)
+        Elemento 4: barra invest vs correntes (estilo termômetro da aba Geral) do
+                    ente selecionado + tabela comparativa abaixo
+        Elemento 5: barras horizontais por categoria (projeção anual = acumulado × ratio_rolling)
+                    altura 520px para alinhar com elemento 4
+        - Novas funções em theme.py: calcular_scatter_correntes_invest(),
+          calcular_categorias_rolling()
+        - Arquivos: dashboard/pages/estadual.py, municipal.py, components/theme.py
+        - Pipeline municipal re-extraído: capitais, 9 contas, 2024–2026 (816 s)
+
+--------------------------------------------------------------------------------
+PRÓXIMOS PASSOS
+--------------------------------------------------------------------------------
+
+[PENDENTE] Aba Federal: nova versão (próxima sessão)
+
+[PENDENTE] Decidir fase de despesa: liquidado vs pago (não urgente)
+
+================================================================================
+
 === Iniciando sessão de 09/06/2026 (tarde) ===
 
 --------------------------------------------------------------------------------
@@ -191,10 +228,12 @@ TAREFAS DA SESSÃO
 PRÓXIMOS PASSOS
 --------------------------------------------------------------------------------
 
-[PENDENTE] Iniciar pipeline municipal completo (todos os ~5.570 municípios):
-           - EXTRAIR_TODOS=True, ANO_INICIO=2024 → estimativa ~20–25 h
-           - Precisa de máquina ligada durante a noite
-           - Comando: python pipelines/municipios/load.py
+[FEITO] Reextrair pipeline municipal (capitais, 9 contas, ANO_INICIO=2024):
+           - EXTRAIR_TODOS=False; 27 capitais × 2024–2026
+           - 15.347 linhas, 364 combinações; duração: 816 s (~14 min)
+           - Decisão: sem séries temporais subnacionais no painel;
+             só situação atual + projeções (2 anos bastam)
+           - Pipeline completo (5.570 mun.) permanece pendente/adiado
 
 [PENDENTE] Decidir fase de despesa: liquidado vs pago (não urgente)
 

@@ -3,6 +3,7 @@ dashboard/pages/estadual.py  —  Gastômetro · Estadual
 """
 
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -12,9 +13,11 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from components.theme import (
     C, inject_css, render_navbar, render_footer,
-    fmt_br, plotly_dark,
+    fmt_bi, fmt_br, plotly_dark,
     carregar_dados, carregar_geojson_estados,
-    calcular_ratio_investimento_estados, calcular_serie_estado,
+    calcular_ratio_investimento_estados,
+    calcular_scatter_correntes_invest,
+    calcular_categorias_rolling,
 )
 
 st.set_page_config(
@@ -28,30 +31,19 @@ render_navbar("estadual")
 
 dados  = carregar_dados()
 df_est = dados.get("estados", pd.DataFrame())
+cont   = dados.get("contador", {})
 
-CONTAS_NOME = {
-    "DespesasExcetoIntraOrcamentarias": "Despesa Total",
-    "DespesasCorrentes":                "Desp. Correntes",
-    "PessoalEEncargosSociais":          "Pessoal e Encargos",
-    "JurosEEncargosDaDivida":           "Juros da Dívida",
-    "OutrasDespesasCorrentes":          "Outras Desp. Correntes",
-    "DespesasDeCapital":                "Desp. de Capital",
-    "Investimentos":                    "Investimentos",
-    "InversoesFinanceiras":             "Inversões Financeiras",
-    "AmortizacaoDaDivida":              "Amort. Dívida",
-}
-
-COLUNA_PADRAO    = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
-COLUNA_BIMESTRAL = "DESPESAS LIQUIDADAS NO BIMESTRE"
+COLUNA_PADRAO = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
 
 CATS_COMP = [
-    ("PessoalEEncargosSociais",  "Pessoal e Encargos",   C["corrente"]),
+    ("PessoalEEncargosSociais",  "Pessoal e Encargos",    C["corrente"]),
     ("JurosEEncargosDaDivida",   "Juros da Dívida",       "#F97316"),
     ("OutrasDespesasCorrentes",  "Outras Correntes",      "#FB923C"),
     ("Investimentos",            "Investimentos",         C["investimento"]),
     ("InversoesFinanceiras",     "Inversões Financeiras", "#16A34A"),
     ("AmortizacaoDaDivida",      "Amort. Dívida",         C["warning"]),
 ]
+COR_MAP = {c: cor for c, _, cor in CATS_COMP}
 
 
 def _section_title(txt: str):
@@ -62,8 +54,61 @@ def _section_title(txt: str):
     )
 
 
-def _render_coropletico(ratio_df: pd.DataFrame) -> tuple[int, int]:
-    """Renderiza o mapa coroplético. Retorna (ano, bimestre) do período exibido."""
+def _render_contador_animado(cont_data: dict, label: str):
+    acc      = cont_data.get("acc_base_rs", 0)
+    taxa     = cont_data.get("taxa_por_segundo_rs", 0)
+    start_ms = cont_data.get("start_ms", 0)
+    ult      = cont_data.get("ultimo_dado", "—")
+    ref      = cont_data.get("bim_referencia_fim", cont_data.get("bim_referencia", "—"))
+    prev     = cont_data.get("previsao_total_rs", 0)
+    # Valor projetado ao final do período do contador (bim_referencia_fim)
+    meta_rs  = acc + prev
+    meta_str = fmt_bi(meta_rs / 1e6)
+
+    # Pré-computa o valor atual em Python para evitar flash de "R$ —" no re-render
+    elapsed_s   = max(0.0, time.time() - start_ms / 1000)
+    initial_rs  = acc + elapsed_s * taxa
+    initial_str = fmt_br(initial_rs, 2)
+
+    st.html(f"""
+<div style="text-align:center;padding:32px 40px;
+            background:linear-gradient(160deg,{C['bg']} 0%,{C['bg3']} 100%);
+            border:1px solid {C['border']};border-radius:16px;margin-bottom:4px;">
+  <div style="font-size:10px;letter-spacing:3px;color:{C['accent']};font-weight:700;
+              text-transform:uppercase;margin-bottom:12px;">
+    Gastos Acumulados — {label}
+  </div>
+  <div id="cnt-est-main" style="
+    font-size:48px;font-weight:800;color:{C['text']};
+    font-family:'Courier New',monospace;letter-spacing:-2px;line-height:1;
+    margin-bottom:14px;">R$&nbsp;{initial_str}</div>
+  <div style="font-size:11px;color:{C['text_muted']};line-height:1.8;">
+    Despesas liquidadas acumuladas no ano, projetadas ao segundo<br/>
+    Último dado: <b style="color:{C['text_dim']}">{ult}</b>
+    &nbsp;·&nbsp;
+    Projetado até {ref}: <b style="color:{C['accent']}">{meta_str}</b>
+  </div>
+</div>
+<script>
+(function() {{
+  if (window._cntEstInterval) {{ clearInterval(window._cntEstInterval); window._cntEstInterval = null; }}
+  const acc = {acc:.2f}, taxa = {taxa:.4f}, start = {start_ms};
+  function fmtBr(n) {{
+    return n.toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+  }}
+  function update() {{
+    const elapsed = Math.max(0, (Date.now() - start) / 1000);
+    const el = document.getElementById('cnt-est-main');
+    if (el) el.innerHTML = 'R$&nbsp;' + fmtBr(acc + elapsed * taxa);
+  }}
+  window._cntEstInterval = setInterval(update, 100);
+  update();
+}})();
+</script>
+""", unsafe_allow_javascript=True)
+
+
+def _render_coropletico(ratio_df: pd.DataFrame, uf_sel: str) -> tuple[int, int]:
     ano_max = int(ratio_df["ano"].iloc[0])
     per_max = int(ratio_df["periodo"].iloc[0])
 
@@ -74,11 +119,9 @@ def _render_coropletico(ratio_df: pd.DataFrame) -> tuple[int, int]:
     )
 
     geojson = carregar_geojson_estados()
-
     if geojson:
         df_map = ratio_df.copy()
         df_map["cod_str"] = df_map["cod_ibge"].astype(str)
-
         fig_map = go.Figure(go.Choroplethmapbox(
             geojson=geojson,
             featureidkey="properties.codarea",
@@ -107,7 +150,7 @@ def _render_coropletico(ratio_df: pd.DataFrame) -> tuple[int, int]:
         ))
         fig_map.update_layout(
             mapbox_style="carto-darkmatter",
-            mapbox_zoom=3.2,
+            mapbox_zoom=2.5,
             mapbox_center={"lat": -14.5, "lon": -51.5},
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
@@ -116,147 +159,166 @@ def _render_coropletico(ratio_df: pd.DataFrame) -> tuple[int, int]:
         )
         st.plotly_chart(fig_map, width="stretch", key="est_mapa")
     else:
-        st.info("GeoJSON não disponível. Exibindo tabela.")
-        st.dataframe(
-            ratio_df[["uf", "ente", "invest_ratio", "invest_milhoes", "total_milhoes"]]
-            .rename(columns={
-                "uf": "UF", "ente": "Estado",
-                "invest_ratio": "Invest. %",
-                "invest_milhoes": "Invest. (R$ mi)",
-                "total_milhoes": "Total (R$ mi)",
-            }),
-            hide_index=True, width="stretch",
-        )
+        st.info("GeoJSON não disponível.")
 
     return ano_max, per_max
 
 
-def _render_composicao(df_uf: pd.DataFrame, nome: str, ano: int, bim: int):
-    st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
-    _section_title(f"Composição do gasto — {nome} · {ano} B{bim}")
-
-    contas_set = {c for c, _, _ in CATS_COMP}
-    df_comp = df_uf[
-        (df_uf["ano"]     == ano) &
-        (df_uf["periodo"] == bim) &
-        (df_uf["coluna"]  == COLUNA_PADRAO) &
-        (df_uf["cod_conta"].isin(contas_set))
-    ].copy()
-
-    if df_comp.empty:
-        st.info("Sem dados de composição para o período.")
+def _render_invest_correntes(scatter_df: pd.DataFrame, uf_sel: str):
+    """Barra invest vs correntes para o ente selecionado (estilo termômetro da aba Geral)."""
+    if scatter_df.empty:
+        st.info("Sem dados suficientes.")
         return
 
-    df_comp = df_comp.groupby("cod_conta")["valor_milhoes"].sum().reset_index()
-    ordem = {c: i for i, (c, _, _) in enumerate(CATS_COMP)}
-    df_comp = df_comp.sort_values("valor_milhoes", ascending=True)
+    if uf_sel == "Consolidado":
+        inv_mi  = float(scatter_df["invest_milhoes"].sum())
+        cor_mi  = float(scatter_df["correntes_milhoes"].sum())
+        tot_mi  = float(scatter_df["total_milhoes"].sum())
+        nome    = "Todos os Estados (consolidado)"
+    else:
+        row = scatter_df[scatter_df["uf"] == uf_sel]
+        if row.empty:
+            st.info(f"Sem dados para {uf_sel}.")
+            return
+        inv_mi  = float(row["invest_milhoes"].iloc[0])
+        cor_mi  = float(row["correntes_milhoes"].iloc[0])
+        tot_mi  = float(row["total_milhoes"].iloc[0])
+        nome    = str(row["ente"].iloc[0])
 
-    cor_map  = {c: cor for c, _, cor in CATS_COMP}
-    nome_map = {c: n   for c, n, _ in CATS_COMP}
+    inv_pct = round(inv_mi / tot_mi * 100, 1) if tot_mi > 0 else 0
+    cor_pct = round(cor_mi / tot_mi * 100, 1) if tot_mi > 0 else 0
 
-    df_comp["nome"] = df_comp["cod_conta"].map(nome_map)
-    df_comp["cor"]  = df_comp["cod_conta"].map(cor_map).fillna(C["primary"])
+    st.html(f"""
+<div style="background:{C['bg2']};border:1px solid {C['border']};border-radius:12px;
+            padding:24px 28px;margin-bottom:12px;">
+  <div style="font-size:11px;color:{C['text_muted']};margin-bottom:14px;
+              text-transform:uppercase;letter-spacing:1.5px;font-weight:600;">
+    {nome} · rolling 12 meses
+  </div>
+  <div style="display:grid;grid-template-columns:80px 1fr 80px;
+              align-items:center;gap:16px;">
+    <div style="text-align:right;">
+      <div style="font-size:28px;font-weight:800;color:{C['investimento']};
+                  font-family:'Courier New',monospace;line-height:1;">
+        {fmt_br(inv_pct, 1)}%
+      </div>
+      <div style="font-size:10px;color:{C['text_muted']};margin-top:3px;">investimento</div>
+      <div style="font-size:11px;color:{C['text_dim']};margin-top:4px;">{fmt_bi(inv_mi)}</div>
+    </div>
+    <div style="height:44px;border-radius:8px;overflow:hidden;display:flex;
+                border:1px solid {C['border']};">
+      <div style="width:{inv_pct:.2f}%;background:linear-gradient(90deg,#14532d,{C['investimento']});
+                  min-width:4px;"></div>
+      <div style="flex:1;background:linear-gradient(90deg,{C['corrente']},#7f1d1d);"></div>
+    </div>
+    <div>
+      <div style="font-size:28px;font-weight:800;color:{C['corrente']};
+                  font-family:'Courier New',monospace;line-height:1;">
+        {fmt_br(cor_pct, 1)}%
+      </div>
+      <div style="font-size:10px;color:{C['text_muted']};margin-top:3px;">correntes</div>
+      <div style="font-size:11px;color:{C['text_dim']};margin-top:4px;">{fmt_bi(cor_mi)}</div>
+    </div>
+  </div>
+</div>
+""")
+
+
+def _render_tabela_comparativa(scatter_df: pd.DataFrame):
+    """Tabela comparativa de todos os estados."""
+    if scatter_df.empty:
+        return
+    _section_title("Comparativo — todos os estados")
+    df_tab = scatter_df[["uf", "ente", "invest_ratio", "correntes_milhoes", "invest_milhoes", "total_milhoes"]].copy()
+    df_tab.columns = ["UF", "Estado", "Invest. %", "Correntes (R$ mi)", "Invest. (R$ mi)", "Total (R$ mi)"]
+    df_tab["Invest. %"]         = df_tab["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
+    df_tab["Correntes (R$ mi)"] = df_tab["Correntes (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    df_tab["Invest. (R$ mi)"]   = df_tab["Invest. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    df_tab["Total (R$ mi)"]     = df_tab["Total (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    st.dataframe(df_tab, hide_index=True, width="stretch", height=380)
+
+
+def _render_categorias(df: pd.DataFrame, cod_ibge_list, ratio_rolling: float, titulo: str):
+    cats_df = calcular_categorias_rolling(df, cod_ibge_list, COLUNA_PADRAO, ratio_rolling)
+    if cats_df.empty:
+        st.info("Sem dados de categorias.")
+        return
+
+    ano = int(cats_df["ano"].iloc[0])
+    bim = int(cats_df["periodo"].iloc[0])
+    _section_title(f"Composição projetada — {titulo} · {ano} (acumulado B{bim} × fator sazonal)")
+
+    cats_df["cor"] = cats_df["cod_conta"].map(COR_MAP).fillna(C["primary"])
 
     fig = go.Figure(go.Bar(
-        x=df_comp["valor_milhoes"] / 1e3,
-        y=df_comp["nome"],
+        x=cats_df["valor_projetado"] / 1e3,
+        y=cats_df["nome"],
         orientation="h",
-        marker_color=df_comp["cor"].tolist(),
+        marker_color=cats_df["cor"].tolist(),
         marker_line_width=0,
-        text=df_comp["valor_milhoes"].apply(lambda v: f"R$ {fmt_br(v/1e3, 1)} bi"),
+        text=cats_df["valor_projetado"].apply(fmt_bi),
         textposition="outside",
-        textfont=dict(size=11, color=C["text_dim"]),
+        textfont=dict(size=12, color=C["text_dim"]),
         cliponaxis=False,
     ))
-    x_max = float((df_comp["valor_milhoes"] / 1e3).max())
+    x_max = float((cats_df["valor_projetado"] / 1e3).max())
     fig.update_layout(
-        xaxis_title="R$ bilhões",
-        xaxis=dict(range=[0, x_max * 1.6]),
+        xaxis_title="R$ bilhões (projeção anual)",
+        xaxis=dict(range=[0, x_max * 1.7]),
         showlegend=False,
     )
-    plotly_dark(fig, height=280, margin=dict(l=140, r=20, t=10, b=30))
-    st.plotly_chart(fig, width="stretch", key="est_composicao")
+    plotly_dark(fig, height=520, margin=dict(l=160, r=20, t=10, b=40))
+    st.plotly_chart(fig, width="stretch", key="est_categorias")
 
 
-# ── Montagem da página ───────────────────────────────────────────────────────
+# ── Montagem ─────────────────────────────────────────────────────────────────
 
 if df_est.empty:
-    st.info(
-        "Dados de estados não encontrados. "
-        "Execute `python pipelines/estados/load.py` para baixar."
-    )
+    st.info("Execute `python pipelines/estados/load.py` para carregar os dados.")
+    render_footer("SICONFI · Tesouro Nacional · Dados bimestrais RREO")
+    st.stop()
+
+ratio_df   = calcular_ratio_investimento_estados(df_est)
+scatter_df = calcular_scatter_correntes_invest(df_est)
+
+# ── Elemento 1: Seletor ───────────────────────────────────────────────────────
+ufs_disp = sorted(df_est["uf"].unique().tolist())
+uf_sel   = st.selectbox("Estado", ["Consolidado"] + ufs_disp, index=0, key="est_uf_sel")
+
+# ── Contexto da seleção ───────────────────────────────────────────────────────
+cont_est = cont.get("estados", {})
+if uf_sel == "Consolidado":
+    cont_data     = cont_est.get("_consolidado", {})
+    cod_ibge_list = None
+    label_cnt     = "Todos os Estados"
 else:
-    ratio_df = calcular_ratio_investimento_estados(df_est)
+    cont_data = cont_est.get(uf_sel, {})
+    row_uf    = df_est[df_est["uf"] == uf_sel]
+    cod_ibge_list = [int(row_uf["cod_ibge"].iloc[0])] if not row_uf.empty else None
+    label_cnt     = row_uf["ente"].iloc[0] if not row_uf.empty else uf_sel
 
-    if ratio_df.empty:
-        st.warning("Não foi possível calcular ratios de investimento.")
-    else:
-        ano_max, per_max = _render_coropletico(ratio_df)
+ratio_rolling = cont_data.get("ratio_rolling", 1.0)
 
-        st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+# ── Elemento 2: Contador animado ─────────────────────────────────────────────
+_render_contador_animado(cont_data, label_cnt)
 
-        col_rank, col_detail = st.columns([1, 2])
+# ── Elemento 3: Coroplético ───────────────────────────────────────────────────
+st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+ano_max, per_max = (
+    _render_coropletico(ratio_df, uf_sel)
+    if not ratio_df.empty else (2026, 2)
+)
 
-        with col_rank:
-            _section_title("Ranking: proporção de investimento")
-            df_rank = ratio_df[["uf", "ente", "invest_ratio", "invest_milhoes", "total_milhoes"]].copy()
-            df_rank.columns = ["UF", "Estado", "Invest. %", "Invest. (R$ mi)", "Total (R$ mi)"]
-            df_rank["Invest. %"] = df_rank["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
-            df_rank["Invest. (R$ mi)"] = df_rank["Invest. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
-            df_rank["Total (R$ mi)"] = df_rank["Total (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
-            st.dataframe(df_rank, hide_index=True, width="stretch", height=450)
+# ── Elementos 4 + 5 lado a lado ──────────────────────────────────────────────
+st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+col4, col5 = st.columns(2)
 
-        with col_detail:
-            _section_title("Detalhe por estado")
-            ufs    = sorted(df_est["uf"].unique())
-            uf_sel = st.selectbox("Estado", ufs, key="est_uf_sel",
-                                  index=ufs.index("SP") if "SP" in ufs else 0)
+with col4:
+    _section_title("Investimento vs Gastos Correntes")
+    _render_invest_correntes(scatter_df, uf_sel)
+    _render_tabela_comparativa(scatter_df)
 
-            df_uf    = df_est[df_est["uf"] == uf_sel]
-            nome_est = df_uf["ente"].iloc[0] if not df_uf.empty else uf_sel
-            cod_ibge = int(df_uf["cod_ibge"].iloc[0]) if not df_uf.empty else 0
-
-            contas_disp  = sorted(df_uf["cod_conta"].unique())
-            _default     = "DespesasExcetoIntraOrcamentarias"
-            _conta_idx   = contas_disp.index(_default) if _default in contas_disp else 0
-            conta_sel    = st.selectbox(
-                "Conta",
-                contas_disp,
-                index=_conta_idx,
-                format_func=lambda c: CONTAS_NOME.get(c, c),
-                key="est_conta_sel",
-            )
-            col_viz = st.selectbox(
-                "Visualizar",
-                [COLUNA_PADRAO, COLUNA_BIMESTRAL],
-                key="est_coluna_sel",
-            )
-
-            serie = calcular_serie_estado(df_est, cod_ibge, conta_sel, col_viz)
-
-            if not serie.empty:
-                _idx = list(range(len(serie)))
-                fig_est = go.Figure(go.Bar(
-                    x=_idx,
-                    y=serie["valor_milhoes"].tolist(),
-                    marker_color=C["primary"],
-                    marker_line_width=0,
-                    customdata=serie["label"].tolist(),
-                    hovertemplate="<b>%{customdata}</b><br>R$ %{y:,.1f} mi<extra></extra>",
-                ))
-                fig_est.update_layout(
-                    title=f"{nome_est} — {CONTAS_NOME.get(conta_sel, conta_sel)}",
-                    xaxis_title="Bimestre",
-                    yaxis_title="R$ milhões",
-                )
-                fig_est.update_xaxes(
-                    tickvals=_idx,
-                    ticktext=serie["label"].tolist(),
-                    tickangle=45,
-                )
-                plotly_dark(fig_est, height=300, margin=dict(l=10, r=10, t=40, b=60))
-                st.plotly_chart(fig_est, width="stretch", key="est_serie")
-
-            _render_composicao(df_uf, nome_est, ano_max, per_max)
+with col5:
+    _render_categorias(df_est, cod_ibge_list, ratio_rolling, label_cnt)
 
 render_footer("SICONFI · Tesouro Nacional · Dados bimestrais RREO")

@@ -1,11 +1,9 @@
 """
 dashboard/pages/municipal.py  —  Gastômetro · Municipal
-
-Choroplético: todos os 5.570 municípios com dados sintéticos (protótipo).
-Ranking + detalhe: capitais estaduais com dados reais extraídos do SICONFI.
 """
 
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -16,9 +14,11 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from components.theme import (
     C, inject_css, render_navbar, render_footer,
-    fmt_br, plotly_dark,
+    fmt_bi, fmt_br, plotly_dark,
     carregar_dados, carregar_geojson_municipios,
-    calcular_ratio_investimento_municipios, calcular_serie_estado,
+    calcular_ratio_investimento_municipios,
+    calcular_scatter_correntes_invest,
+    calcular_categorias_rolling,
 )
 
 st.set_page_config(
@@ -32,30 +32,19 @@ render_navbar("municipal")
 
 dados  = carregar_dados()
 df_mun = dados.get("municipios", pd.DataFrame())
+cont   = dados.get("contador", {})
 
-CONTAS_NOME = {
-    "DespesasExcetoIntraOrcamentarias": "Despesa Total",
-    "DespesasCorrentes":                "Desp. Correntes",
-    "PessoalEEncargosSociais":          "Pessoal e Encargos",
-    "JurosEEncargosDaDivida":           "Juros da Dívida",
-    "OutrasDespesasCorrentes":          "Outras Desp. Correntes",
-    "DespesasDeCapital":                "Desp. de Capital",
-    "Investimentos":                    "Investimentos",
-    "InversoesFinanceiras":             "Inversões Financeiras",
-    "AmortizacaoDaDivida":              "Amort. Dívida",
-}
-
-COLUNA_PADRAO    = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
-COLUNA_BIMESTRAL = "DESPESAS LIQUIDADAS NO BIMESTRE"
+COLUNA_PADRAO = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
 
 CATS_COMP = [
-    ("PessoalEEncargosSociais",  "Pessoal e Encargos",   C["corrente"]),
+    ("PessoalEEncargosSociais",  "Pessoal e Encargos",    C["corrente"]),
     ("JurosEEncargosDaDivida",   "Juros da Dívida",       "#F97316"),
     ("OutrasDespesasCorrentes",  "Outras Correntes",      "#FB923C"),
     ("Investimentos",            "Investimentos",         C["investimento"]),
     ("InversoesFinanceiras",     "Inversões Financeiras", "#16A34A"),
     ("AmortizacaoDaDivida",      "Amort. Dívida",         C["warning"]),
 ]
+COR_MAP = {c: cor for c, _, cor in CATS_COMP}
 
 
 def _section_title(txt: str):
@@ -66,55 +55,87 @@ def _section_title(txt: str):
     )
 
 
-def _gerar_dados_sinteticos(geojson: dict, ratio_reais: pd.DataFrame) -> pd.DataFrame:
-    """
-    Gera invest_ratio sintético para todos os municípios do GeoJSON.
-    Valores são distribuídos em torno da média das capitais por estado,
-    com ruído gaussiano — apenas para demonstração visual.
-    """
-    rng = np.random.default_rng(42)
+def _render_contador_animado(cont_data: dict, label: str):
+    acc      = cont_data.get("acc_base_rs", 0)
+    taxa     = cont_data.get("taxa_por_segundo_rs", 0)
+    start_ms = cont_data.get("start_ms", 0)
+    ult      = cont_data.get("ultimo_dado", "—")
+    ref      = cont_data.get("bim_referencia_fim", cont_data.get("bim_referencia", "—"))
+    prev     = cont_data.get("previsao_total_rs", 0)
+    meta_rs  = acc + prev
+    meta_str = fmt_bi(meta_rs / 1e6)
 
-    # Média por UF a partir das capitais reais (fallback = 6.0%)
+    elapsed_s   = max(0.0, time.time() - start_ms / 1000)
+    initial_rs  = acc + elapsed_s * taxa
+    initial_str = fmt_br(initial_rs, 2)
+
+    st.html(f"""
+<div style="text-align:center;padding:32px 40px;
+            background:linear-gradient(160deg,{C['bg']} 0%,{C['bg3']} 100%);
+            border:1px solid {C['border']};border-radius:16px;margin-bottom:4px;">
+  <div style="font-size:10px;letter-spacing:3px;color:{C['accent']};font-weight:700;
+              text-transform:uppercase;margin-bottom:12px;">
+    Gastos Acumulados — {label}
+  </div>
+  <div id="cnt-mun-main" style="
+    font-size:48px;font-weight:800;color:{C['text']};
+    font-family:'Courier New',monospace;letter-spacing:-2px;line-height:1;
+    margin-bottom:14px;">R$&nbsp;{initial_str}</div>
+  <div style="font-size:11px;color:{C['text_muted']};line-height:1.8;">
+    Despesas liquidadas acumuladas no ano, projetadas ao segundo<br/>
+    Último dado: <b style="color:{C['text_dim']}">{ult}</b>
+    &nbsp;·&nbsp;
+    Projetado até {ref}: <b style="color:{C['accent']}">{meta_str}</b>
+  </div>
+</div>
+<script>
+(function() {{
+  if (window._cntMunInterval) {{ clearInterval(window._cntMunInterval); window._cntMunInterval = null; }}
+  const acc = {acc:.2f}, taxa = {taxa:.4f}, start = {start_ms};
+  function fmtBr(n) {{
+    return n.toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+  }}
+  function update() {{
+    const elapsed = Math.max(0, (Date.now() - start) / 1000);
+    const el = document.getElementById('cnt-mun-main');
+    if (el) el.innerHTML = 'R$&nbsp;' + fmtBr(acc + elapsed * taxa);
+  }}
+  window._cntMunInterval = setInterval(update, 100);
+  update();
+}})();
+</script>
+""", unsafe_allow_javascript=True)
+
+
+def _gerar_dados_sinteticos(geojson: dict, ratio_reais: pd.DataFrame) -> pd.DataFrame:
+    rng = np.random.default_rng(42)
     if not ratio_reais.empty:
-        media_uf = ratio_reais.groupby("uf")["invest_ratio"].mean().to_dict()
+        media_uf    = ratio_reais.groupby("uf")["invest_ratio"].mean().to_dict()
         media_geral = ratio_reais["invest_ratio"].mean()
     else:
-        media_uf   = {}
-        media_geral = 6.0
+        media_uf, media_geral = {}, 6.0
 
-    # Mapeia cod_ibge (7 dígitos) → UF via prefixo de 2 dígitos do código IBGE estadual
-    # Ex: 3550308 (São Paulo-SP) → prefixo "35" → UF "SP"
-    uf_por_prefixo2 = {
-        "12": "AC", "27": "AL", "13": "AM", "16": "AP", "29": "BA",
-        "23": "CE", "53": "DF", "32": "ES", "52": "GO", "21": "MA",
-        "51": "MT", "50": "MS", "31": "MG", "15": "PA", "25": "PB",
-        "41": "PR", "26": "PE", "22": "PI", "33": "RJ", "24": "RN",
-        "43": "RS", "11": "RO", "14": "RR", "42": "SC", "35": "SP",
-        "28": "SE", "17": "TO",
+    uf_por_prefixo = {
+        "12":"AC","27":"AL","13":"AM","16":"AP","29":"BA","23":"CE","53":"DF",
+        "32":"ES","52":"GO","21":"MA","51":"MT","50":"MS","31":"MG","15":"PA",
+        "25":"PB","41":"PR","26":"PE","22":"PI","33":"RJ","24":"RN","43":"RS",
+        "11":"RO","14":"RR","42":"SC","35":"SP","28":"SE","17":"TO",
     }
-
     rows = []
     for feat in geojson.get("features", []):
         cod = feat.get("properties", {}).get("codarea", "")
         if not cod:
             continue
-        prefixo = str(cod)[:2]
-        uf = uf_por_prefixo2.get(prefixo, "")
+        uf    = uf_por_prefixo.get(str(cod)[:2], "")
         media = media_uf.get(uf, media_geral)
-        # Ruído gaussiano com desvio-padrão de 2 pontos percentuais
         ratio = float(np.clip(rng.normal(media, 2.0), 0.5, 30.0))
         rows.append({"cod_str": str(cod), "invest_ratio": round(ratio, 2)})
-
     return pd.DataFrame(rows)
 
 
-def _render_coropletico_municipal(ratio_reais: pd.DataFrame) -> tuple[int, int]:
-    """Choroplético com dados sintéticos para todos os municípios."""
-    if not ratio_reais.empty:
-        ano_max = int(ratio_reais["ano"].iloc[0])
-        per_max = int(ratio_reais["periodo"].iloc[0])
-    else:
-        ano_max, per_max = 2026, 1
+def _render_coropletico(ratio_reais: pd.DataFrame):
+    ano_max = int(ratio_reais["ano"].iloc[0]) if not ratio_reais.empty else 2026
+    per_max = int(ratio_reais["periodo"].iloc[0]) if not ratio_reais.empty else 1
 
     _section_title(
         f"Proporção de Investimento por Município — {ano_max} B{per_max} "
@@ -122,30 +143,23 @@ def _render_coropletico_municipal(ratio_reais: pd.DataFrame) -> tuple[int, int]:
         f"⚠ dados sintéticos — protótipo visual</span>"
     )
     st.caption(
-        "Coroplético demonstrativo: os valores municipais são gerados artificialmente "
-        "com base nas médias estaduais das capitais. "
-        "O painel de detalhe abaixo usa dados reais das capitais estaduais."
+        "Coroplético demonstrativo: valores gerados artificialmente com base nas médias "
+        "das capitais estaduais. O painel de detalhe abaixo usa dados reais das capitais."
     )
 
     geojson = carregar_geojson_municipios()
-
     if geojson is None:
-        st.warning(
-            "Malha municipal não disponível. "
-            "Conecte à internet para baixar automaticamente do IBGE (~15 MB)."
-        )
-        return ano_max, per_max
+        st.warning("Malha municipal não disponível.")
+        return
 
     df_sint = _gerar_dados_sinteticos(geojson, ratio_reais)
-
     fig_map = go.Figure(go.Choroplethmapbox(
         geojson=geojson,
         featureidkey="properties.codarea",
         locations=df_sint["cod_str"],
         z=df_sint["invest_ratio"],
         colorscale="RdYlGn",
-        zmin=0,
-        zmax=20,
+        zmin=0, zmax=20,
         colorbar=dict(
             title=dict(text="%", font=dict(color=C["text_dim"], size=11)),
             thickness=14,
@@ -158,7 +172,7 @@ def _render_coropletico_municipal(ratio_reais: pd.DataFrame) -> tuple[int, int]:
     ))
     fig_map.update_layout(
         mapbox_style="carto-darkmatter",
-        mapbox_zoom=3.2,
+        mapbox_zoom=2.5,
         mapbox_center={"lat": -14.5, "lon": -51.5},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -167,143 +181,185 @@ def _render_coropletico_municipal(ratio_reais: pd.DataFrame) -> tuple[int, int]:
     )
     st.plotly_chart(fig_map, width="stretch", key="mun_mapa")
 
-    return ano_max, per_max
 
-
-def _render_composicao(df_mun_sel: pd.DataFrame, nome: str, ano: int, bim: int):
-    st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
-    _section_title(f"Composição do gasto — {nome} · {ano} B{bim}")
-
-    contas_set = {c for c, _, _ in CATS_COMP}
-    df_comp = df_mun_sel[
-        (df_mun_sel["ano"]     == ano) &
-        (df_mun_sel["periodo"] == bim) &
-        (df_mun_sel["coluna"]  == COLUNA_PADRAO) &
-        (df_mun_sel["cod_conta"].isin(contas_set))
-    ].copy()
-
-    if df_comp.empty:
-        st.info("Sem dados de composição para o período.")
+def _render_invest_correntes(scatter_df: pd.DataFrame, cod_ibge_sel: int | None, label: str):
+    """Barra invest vs correntes para o município/consolidado selecionado."""
+    if scatter_df.empty:
+        st.info("Sem dados suficientes.")
         return
 
-    df_comp = df_comp.groupby("cod_conta")["valor_milhoes"].sum().reset_index()
-    df_comp = df_comp.sort_values("valor_milhoes", ascending=True)
+    if cod_ibge_sel is None:
+        inv_mi = float(scatter_df["invest_milhoes"].sum())
+        cor_mi = float(scatter_df["correntes_milhoes"].sum())
+        tot_mi = float(scatter_df["total_milhoes"].sum())
+        nome   = "Todas as Capitais (consolidado)"
+    else:
+        row = scatter_df[scatter_df["cod_ibge"] == cod_ibge_sel]
+        if row.empty:
+            st.info("Sem dados para o município selecionado.")
+            return
+        inv_mi = float(row["invest_milhoes"].iloc[0])
+        cor_mi = float(row["correntes_milhoes"].iloc[0])
+        tot_mi = float(row["total_milhoes"].iloc[0])
+        nome   = str(row["ente"].iloc[0])
 
-    cor_map  = {c: cor for c, _, cor in CATS_COMP}
-    nome_map = {c: n   for c, n, _ in CATS_COMP}
-    df_comp["nome"] = df_comp["cod_conta"].map(nome_map)
-    df_comp["cor"]  = df_comp["cod_conta"].map(cor_map).fillna(C["primary"])
+    inv_pct = round(inv_mi / tot_mi * 100, 1) if tot_mi > 0 else 0
+    cor_pct = round(cor_mi / tot_mi * 100, 1) if tot_mi > 0 else 0
+
+    st.html(f"""
+<div style="background:{C['bg2']};border:1px solid {C['border']};border-radius:12px;
+            padding:24px 28px;margin-bottom:12px;">
+  <div style="font-size:11px;color:{C['text_muted']};margin-bottom:14px;
+              text-transform:uppercase;letter-spacing:1.5px;font-weight:600;">
+    {nome} · rolling 12 meses
+  </div>
+  <div style="display:grid;grid-template-columns:80px 1fr 80px;
+              align-items:center;gap:16px;">
+    <div style="text-align:right;">
+      <div style="font-size:28px;font-weight:800;color:{C['investimento']};
+                  font-family:'Courier New',monospace;line-height:1;">
+        {fmt_br(inv_pct, 1)}%
+      </div>
+      <div style="font-size:10px;color:{C['text_muted']};margin-top:3px;">investimento</div>
+      <div style="font-size:11px;color:{C['text_dim']};margin-top:4px;">{fmt_bi(inv_mi)}</div>
+    </div>
+    <div style="height:44px;border-radius:8px;overflow:hidden;display:flex;
+                border:1px solid {C['border']};">
+      <div style="width:{inv_pct:.2f}%;background:linear-gradient(90deg,#14532d,{C['investimento']});
+                  min-width:4px;"></div>
+      <div style="flex:1;background:linear-gradient(90deg,{C['corrente']},#7f1d1d);"></div>
+    </div>
+    <div>
+      <div style="font-size:28px;font-weight:800;color:{C['corrente']};
+                  font-family:'Courier New',monospace;line-height:1;">
+        {fmt_br(cor_pct, 1)}%
+      </div>
+      <div style="font-size:10px;color:{C['text_muted']};margin-top:3px;">correntes</div>
+      <div style="font-size:11px;color:{C['text_dim']};margin-top:4px;">{fmt_bi(cor_mi)}</div>
+    </div>
+  </div>
+</div>
+""")
+
+
+def _render_tabela_comparativa(scatter_df: pd.DataFrame, uf_sel: str):
+    """Top 5 maiores + 5 menores em invest%; se estado selecionado filtra por estado."""
+    if scatter_df.empty:
+        return
+
+    if uf_sel == "Consolidado":
+        top5 = scatter_df.nlargest(5,  "invest_ratio")
+        bot5 = scatter_df.nsmallest(5, "invest_ratio")
+        df_tab_base = pd.concat([top5, bot5]).drop_duplicates("cod_ibge")
+        titulo = "Top 5 maiores / menores invest. — capitais"
+    else:
+        df_tab_base = scatter_df[scatter_df["uf"] == uf_sel]
+        titulo = f"Capitais disponíveis — {uf_sel}"
+
+    _section_title(titulo)
+    df_tab = df_tab_base[["uf", "ente", "invest_ratio", "correntes_milhoes", "invest_milhoes", "total_milhoes"]].copy()
+    df_tab.columns = ["UF", "Capital", "Invest. %", "Correntes (R$ mi)", "Invest. (R$ mi)", "Total (R$ mi)"]
+    df_tab["Invest. %"]         = df_tab["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
+    df_tab["Correntes (R$ mi)"] = df_tab["Correntes (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    df_tab["Invest. (R$ mi)"]   = df_tab["Invest. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    df_tab["Total (R$ mi)"]     = df_tab["Total (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    st.dataframe(df_tab, hide_index=True, width="stretch", height=380)
+
+
+def _render_categorias(df: pd.DataFrame, cod_ibge_list, ratio_rolling: float, titulo: str):
+    cats_df = calcular_categorias_rolling(df, cod_ibge_list, COLUNA_PADRAO, ratio_rolling)
+    if cats_df.empty:
+        st.info("Sem dados de categorias.")
+        return
+
+    ano = int(cats_df["ano"].iloc[0])
+    bim = int(cats_df["periodo"].iloc[0])
+    _section_title(f"Composição projetada — {titulo} · {ano} (acumulado B{bim} × fator sazonal)")
+
+    cats_df["cor"] = cats_df["cod_conta"].map(COR_MAP).fillna(C["primary"])
 
     fig = go.Figure(go.Bar(
-        x=df_comp["valor_milhoes"],
-        y=df_comp["nome"],
+        x=cats_df["valor_projetado"] / 1e3,
+        y=cats_df["nome"],
         orientation="h",
-        marker_color=df_comp["cor"].tolist(),
+        marker_color=cats_df["cor"].tolist(),
         marker_line_width=0,
-        text=df_comp["valor_milhoes"].apply(lambda v: f"R$ {fmt_br(v, 1)} mi"),
+        text=cats_df["valor_projetado"].apply(fmt_bi),
         textposition="outside",
-        textfont=dict(size=11, color=C["text_dim"]),
+        textfont=dict(size=12, color=C["text_dim"]),
         cliponaxis=False,
     ))
-    x_max = float(df_comp["valor_milhoes"].max())
+    x_max = float((cats_df["valor_projetado"] / 1e3).max())
     fig.update_layout(
-        xaxis_title="R$ milhões",
-        xaxis=dict(range=[0, x_max * 1.6]),
+        xaxis_title="R$ bilhões (projeção anual)",
+        xaxis=dict(range=[0, x_max * 1.7]),
         showlegend=False,
     )
-    plotly_dark(fig, height=280, margin=dict(l=140, r=20, t=10, b=30))
-    st.plotly_chart(fig, width="stretch", key="mun_composicao")
+    plotly_dark(fig, height=520, margin=dict(l=160, r=20, t=10, b=40))
+    st.plotly_chart(fig, width="stretch", key="mun_categorias")
 
 
-# ── Montagem da página ───────────────────────────────────────────────────────
-
-ratio_reais = calcular_ratio_investimento_municipios(df_mun) if not df_mun.empty else pd.DataFrame()
-
-ano_max, per_max = _render_coropletico_municipal(ratio_reais)
-
-st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+# ── Montagem ─────────────────────────────────────────────────────────────────
 
 if df_mun.empty:
-    st.info(
-        "Dados de capitais não encontrados. "
-        "Execute `python pipelines/municipios/load.py` para baixar."
-    )
+    st.info("Execute `python pipelines/municipios/load.py` para carregar os dados.")
+    render_footer("SICONFI · Tesouro Nacional · Capitais estaduais · RREO bimestral")
+    st.stop()
+
+ratio_reais = calcular_ratio_investimento_municipios(df_mun)
+scatter_df  = calcular_scatter_correntes_invest(df_mun)
+
+# ── Elemento 1: Seletores ─────────────────────────────────────────────────────
+ufs_disp = sorted(df_mun["uf"].unique().tolist())
+
+col_s1, col_s2 = st.columns(2)
+with col_s1:
+    uf_sel = st.selectbox("Estado", ["Consolidado"] + ufs_disp, index=0, key="mun_uf_sel")
+
+with col_s2:
+    if uf_sel == "Consolidado":
+        mun_cod = None
+        st.selectbox("Município", ["Todas as capitais"], index=0, key="mun_mun_sel", disabled=True)
+    else:
+        df_uf    = df_mun[df_mun["uf"] == uf_sel][["cod_ibge", "ente"]].drop_duplicates()
+        mun_opts = dict(zip(df_uf["ente"], df_uf["cod_ibge"]))
+        mun_sel  = st.selectbox("Município", list(mun_opts.keys()), index=0, key="mun_mun_sel")
+        mun_cod  = int(mun_opts[mun_sel])
+
+# ── Contexto da seleção ───────────────────────────────────────────────────────
+cont_mun = cont.get("municipios", {})
+if mun_cod is None:
+    cont_data     = cont_mun.get("_consolidado", {})
+    cod_ibge_list = None
+    label_cnt     = "Todas as Capitais"
 else:
-    col_rank, col_detail = st.columns([1, 2])
+    cont_data     = cont_mun.get(str(mun_cod), {})
+    cod_ibge_list = [mun_cod]
+    label_cnt     = (
+        df_mun[df_mun["cod_ibge"] == mun_cod]["ente"].iloc[0]
+        if not df_mun[df_mun["cod_ibge"] == mun_cod].empty
+        else str(mun_cod)
+    )
 
-    with col_rank:
-        _section_title("Ranking: capitais estaduais")
-        if not ratio_reais.empty:
-            df_rank = ratio_reais[["uf", "ente", "invest_ratio", "invest_milhoes", "total_milhoes"]].copy()
-            df_rank.columns = ["UF", "Capital", "Invest. %", "Invest. (R$ mi)", "Total (R$ mi)"]
-            df_rank["Invest. %"] = df_rank["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
-            df_rank["Invest. (R$ mi)"] = df_rank["Invest. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
-            df_rank["Total (R$ mi)"] = df_rank["Total (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
-            st.dataframe(df_rank, hide_index=True, width="stretch", height=450)
-        else:
-            st.info("Aguardando cálculo dos ratios.")
+ratio_rolling = cont_data.get("ratio_rolling", 1.0)
 
-    with col_detail:
-        _section_title("Detalhe por capital")
+# ── Elemento 2: Contador animado ─────────────────────────────────────────────
+_render_contador_animado(cont_data, label_cnt)
 
-        ufs_mun  = sorted(df_mun["uf"].unique())
-        uf_sel   = st.selectbox("UF", ufs_mun, key="mun_uf_sel",
-                                index=ufs_mun.index("SP") if "SP" in ufs_mun else 0)
+# ── Elemento 3: Coroplético ───────────────────────────────────────────────────
+st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+_render_coropletico(ratio_reais)
 
-        df_uf_mun = df_mun[df_mun["uf"] == uf_sel]
-        muns_disp = (
-            df_uf_mun[["cod_ibge", "ente"]]
-            .drop_duplicates()
-            .sort_values("ente")
-        )
+# ── Elementos 4 + 5 lado a lado ──────────────────────────────────────────────
+st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
+col4, col5 = st.columns(2)
 
-        mun_opts = dict(zip(muns_disp["ente"], muns_disp["cod_ibge"]))
-        mun_nome = st.selectbox("Capital", list(mun_opts.keys()), key="mun_nome_sel")
-        mun_cod  = mun_opts[mun_nome]
+with col4:
+    _section_title("Investimento vs Gastos Correntes")
+    _render_invest_correntes(scatter_df, mun_cod, label_cnt)
+    _render_tabela_comparativa(scatter_df, uf_sel)
 
-        df_sel = df_mun[df_mun["cod_ibge"] == mun_cod]
-
-        contas_disp  = sorted(df_sel["cod_conta"].unique())
-        _default     = "DespesasExcetoIntraOrcamentarias"
-        _conta_idx   = contas_disp.index(_default) if _default in contas_disp else 0
-        conta_sel    = st.selectbox(
-            "Conta",
-            contas_disp,
-            index=_conta_idx,
-            format_func=lambda c: CONTAS_NOME.get(c, c),
-            key="mun_conta_sel",
-        )
-        col_viz = st.selectbox(
-            "Visualizar",
-            [COLUNA_PADRAO, COLUNA_BIMESTRAL],
-            key="mun_coluna_sel",
-        )
-
-        serie = calcular_serie_estado(df_mun, mun_cod, conta_sel, col_viz)
-
-        if not serie.empty:
-            _idx = list(range(len(serie)))
-            fig_mun = go.Figure(go.Bar(
-                x=_idx,
-                y=serie["valor_milhoes"].tolist(),
-                marker_color=C["accent"],
-                marker_line_width=0,
-                customdata=serie["label"].tolist(),
-                hovertemplate="<b>%{customdata}</b><br>R$ %{y:,.1f} mi<extra></extra>",
-            ))
-            fig_mun.update_layout(
-                title=f"{mun_nome} ({uf_sel}) — {CONTAS_NOME.get(conta_sel, conta_sel)}",
-                xaxis_title="Bimestre",
-                yaxis_title="R$ milhões",
-            )
-            fig_mun.update_xaxes(
-                tickvals=_idx,
-                ticktext=serie["label"].tolist(),
-                tickangle=45,
-            )
-            plotly_dark(fig_mun, height=300, margin=dict(l=10, r=10, t=40, b=60))
-            st.plotly_chart(fig_mun, width="stretch", key="mun_serie")
-
-        _render_composicao(df_sel, mun_nome, ano_max, per_max)
+with col5:
+    _render_categorias(df_mun, cod_ibge_list, ratio_rolling, label_cnt)
 
 render_footer("SICONFI · Tesouro Nacional · Capitais estaduais · RREO bimestral")
