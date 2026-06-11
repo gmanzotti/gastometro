@@ -54,7 +54,6 @@ _NAV_PAGES = [
     ("Federal",    "/federal"),
     ("Estadual",   "/estadual"),
     ("Municipal",  "/municipal"),
-    ("Projeções",  "/projecoes"),
 ]
 
 # Mapeamento de active_page para href
@@ -63,7 +62,6 @@ _PAGE_KEYS = {
     "federal":    "/federal",
     "estadual":   "/estadual",
     "municipal":  "/municipal",
-    "projecoes":  "/projecoes",
 }
 
 
@@ -80,8 +78,6 @@ def inject_css() -> None:
     st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
-html {{ zoom: 90%; }}
 
 html, body, .stApp {{
     font-family: 'Inter', sans-serif !important;
@@ -363,7 +359,6 @@ _RSEL = dict(
     bgcolor=C["bg3"], bordercolor=C["border"], borderwidth=1,
     font=dict(color=C["text_dim"], size=11), activecolor=C["primary"],
 )
-_RSLD = dict(bgcolor=C["bg2"], bordercolor=C["border"], thickness=0.06)
 
 
 def plotly_dark(fig: go.Figure, height: int = 420, margin: dict | None = None) -> go.Figure:
@@ -375,12 +370,16 @@ def plotly_dark(fig: go.Figure, height: int = 420, margin: dict | None = None) -
         font=dict(family="Inter, sans-serif", color=C["text_dim"], size=12),
         height=height,
         margin=margin,
-        title_font=dict(color=C["text"], size=14),
         legend=dict(
             bgcolor="rgba(13,27,46,0.9)", bordercolor=C["border"], borderwidth=1,
             font=dict(color=C["text"], size=12),
         ),
     )
+    # Estiliza a fonte do título APENAS se o gráfico tiver título: definir
+    # title_font num gráfico sem título cria layout.title = {font: ...} sem
+    # texto, e o renderer do Streamlit exibe "undefined" no canto do gráfico.
+    if fig.layout.title.text:
+        fig.update_layout(title_font=dict(color=C["text"], size=14))
     fig.update_xaxes(
         gridcolor=C["border"], zerolinecolor=C["border"],
         tickfont=dict(color=C["text_dim"], size=11),
@@ -399,6 +398,7 @@ def rangeselector_buttons() -> list:
         dict(count=1,  label="1a",  step="year", stepmode="backward"),
         dict(count=3,  label="3a",  step="year", stepmode="backward"),
         dict(count=5,  label="5a",  step="year", stepmode="backward"),
+        dict(count=10, label="10a", step="year", stepmode="backward"),
         dict(step="all", label="Máx"),
     ]
 
@@ -620,6 +620,99 @@ def rtn_delta_yoy(
     if atual is None or ant is None or ant == 0:
         return None
     return round((atual - ant) / abs(ant) * 100, 1)
+
+
+# ── Termômetro de investimento (compartilhado entre Geral e Federal) ──────
+
+def ratio_federal(df: pd.DataFrame) -> tuple | None:
+    """(invest_pct, invest_mi, total_mi) usando RTN — rolling 12 meses.
+
+    Usa a série memo 'Investimento' da aba 1.2 (idêntica ao total da aba 1.3:
+    investimentos GND 4 + inversões GND 5 + ajuste de OB), não a proxy de
+    Discricionárias que incluía custeio discricionário.
+    """
+    if df.empty:
+        return None
+    ano  = int(df["ano"].max())
+    mes  = int(df[df["ano"] == ano]["mes"].max())
+    col  = "corrente_milhoes"
+    tot  = rtn_soma_12m(df, "4. ",          ano, mes, col)
+    inv  = rtn_soma_12m(df, "Investimento", ano, mes, col)
+    if tot is None or inv is None or tot == 0:
+        return None
+    return round(inv / tot * 100, 1), inv, tot
+
+
+def linha_termometro(
+    label: str,
+    nota: str,
+    ratio: tuple | None,
+    destaque: bool = False,
+) -> str:
+    """Retorna HTML de uma linha do termômetro (label | invest% | barra | correntes%)."""
+    bar_h  = "48px" if destaque else "36px"
+    n_size = "26px" if destaque else "20px"
+    l_size = "15px" if destaque else "13px"
+    mb     = "24px" if destaque else "14px"
+    fw     = "700"  if destaque else "600"
+
+    # Grid com coluna de label explícita: main=200px, sub-entes=232px
+    # Isso garante que invest% dos sub-entes fique exatamente 32px à direita do consolidado
+    col1   = "200px" if destaque else "232px"
+    grid   = f"display:grid;grid-template-columns:{col1} 80px 1fr 80px;align-items:center;gap:20px;"
+    border = f"border-left:3px solid {C['accent']};padding-left:8px;" if destaque else "padding-left:32px;"
+
+    if ratio is None:
+        return (
+            f'<div style="margin-bottom:{mb};{grid}opacity:0.4;">'
+            f'<div style="{border}font-size:{l_size};font-weight:{fw};color:{C["text"]}">{label}</div>'
+            f'<div style="grid-column:2/5;font-size:12px;color:{C["text_muted"]};text-align:center;">dados não disponíveis</div>'
+            f'</div>'
+        )
+
+    invest_pct   = ratio[0]
+    corrente_pct = round(100 - invest_pct, 1)
+
+    return (
+        f'<div style="margin-bottom:{mb};{grid}">'
+        f'<div style="{border}">'
+        f'<div style="font-size:{l_size};font-weight:{fw};color:{C["text"]};line-height:1.2;">{label}</div>'
+        f'<div style="font-size:10px;color:{C["text_muted"]};margin-top:3px;line-height:1.4;">{nota}</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div style="font-size:{n_size};font-weight:800;color:{C["investimento"]};'
+        f'font-family:\'Courier New\',monospace;line-height:1;">{fmt_br(invest_pct, 1)}%</div>'
+        f'<div style="font-size:9px;color:{C["text_muted"]};margin-top:2px;">investimento</div>'
+        f'</div>'
+        f'<div style="height:{bar_h};border-radius:8px;overflow:hidden;display:flex;'
+        f'border:1px solid {C["border"]};">'
+        f'<div style="width:{invest_pct:.2f}%;background:linear-gradient(90deg,#14532d,{C["investimento"]});min-width:4px;"></div>'
+        f'<div style="flex:1;background:linear-gradient(90deg,{C["corrente"]},#7f1d1d);"></div>'
+        f'</div>'
+        f'<div>'
+        f'<div style="font-size:{n_size};font-weight:800;color:{C["corrente"]};'
+        f'font-family:\'Courier New\',monospace;line-height:1;">{fmt_br(corrente_pct, 1)}%</div>'
+        f'<div style="font-size:9px;color:{C["text_muted"]};margin-top:2px;">correntes</div>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def termometro_header(cols_grid: str = "200px 80px 1fr 80px") -> str:
+    """Cabeçalho de colunas do termômetro (Esfera | Investimento | Proporção | Correntes)."""
+    return (
+        f'<div style="display:grid;grid-template-columns:{cols_grid};gap:20px;'
+        f'margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid {C["border"]};">'
+        f'<div style="font-size:10px;color:{C["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Esfera</div>'
+        f'<div style="text-align:right;font-size:10px;color:{C["investimento"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Investimento</div>'
+        f'<div style="text-align:center;font-size:10px;color:{C["text_muted"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Proporção</div>'
+        f'<div style="font-size:10px;color:{C["corrente"]};'
+        f'text-transform:uppercase;letter-spacing:1px;">Correntes</div>'
+        f'</div>'
+    )
 
 
 # ── Cálculos scatter e categorias ─────────────────────────────────────────

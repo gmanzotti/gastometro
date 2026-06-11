@@ -22,11 +22,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from components.theme import (
     C, inject_css, render_navbar, render_footer,
-    fmt_br,
     carregar_dados,
     calcular_ratio_investimento_estados,
     calcular_ratio_investimento_municipios,
-    rtn_soma_12m,
+    ratio_federal, linha_termometro, termometro_header,
 )
 
 st.set_page_config(
@@ -227,24 +226,6 @@ def _ratio_esfera(ratio_df: pd.DataFrame | None) -> tuple | None:
     return round(inv / tot * 100, 1), inv, tot
 
 
-def _ratio_federal(df: pd.DataFrame) -> tuple | None:
-    """(invest_pct, invest_mi, total_mi) usando RTN — rolling 12 meses, dado real de investimento.
-
-    Usa a série 'Investimento' das abas 1.3/1.3-A da RTN (investimento público em obras
-    e equipamentos), não mais a proxy de Discricionárias que incluía custeio discricionário.
-    """
-    if df.empty:
-        return None
-    ano  = int(df["ano"].max())
-    mes  = int(df[df["ano"] == ano]["mes"].max())
-    col  = "corrente_milhoes"
-    tot  = rtn_soma_12m(df, "4. ",          ano, mes, col)
-    inv  = rtn_soma_12m(df, "Investimento", ano, mes, col)
-    if tot is None or inv is None or tot == 0:
-        return None
-    return round(inv / tot * 100, 1), inv, tot
-
-
 def _ratio_total(*ratios: tuple | None) -> tuple | None:
     """Média ponderada de todas as esferas disponíveis."""
     inv_sum = sum(r[1] for r in ratios if r is not None)
@@ -254,68 +235,13 @@ def _ratio_total(*ratios: tuple | None) -> tuple | None:
     return round(inv_sum / tot_sum * 100, 1), inv_sum, tot_sum
 
 
-def _linha_termometro(
-    label: str,
-    nota: str,
-    ratio: tuple | None,
-    destaque: bool = False,
-) -> str:
-    """Retorna HTML de uma linha do termômetro (label | invest% | barra | correntes%)."""
-    bar_h  = "48px" if destaque else "36px"
-    n_size = "26px" if destaque else "20px"
-    l_size = "15px" if destaque else "13px"
-    mb     = "24px" if destaque else "14px"
-    fw     = "700"  if destaque else "600"
-
-    # Grid com coluna de label explícita: main=200px, sub-entes=232px
-    # Isso garante que invest% dos sub-entes fique exatamente 32px à direita do consolidado
-    col1   = "200px" if destaque else "232px"
-    grid   = f"display:grid;grid-template-columns:{col1} 80px 1fr 80px;align-items:center;gap:20px;"
-    border = f"border-left:3px solid {C['accent']};padding-left:8px;" if destaque else "padding-left:32px;"
-
-    if ratio is None:
-        return (
-            f'<div style="margin-bottom:{mb};{grid}opacity:0.4;">'
-            f'<div style="{border}font-size:{l_size};font-weight:{fw};color:{C["text"]}">{label}</div>'
-            f'<div style="grid-column:2/5;font-size:12px;color:{C["text_muted"]};text-align:center;">dados não disponíveis</div>'
-            f'</div>'
-        )
-
-    invest_pct   = ratio[0]
-    corrente_pct = round(100 - invest_pct, 1)
-
-    return (
-        f'<div style="margin-bottom:{mb};{grid}">'
-        f'<div style="{border}">'
-        f'<div style="font-size:{l_size};font-weight:{fw};color:{C["text"]};line-height:1.2;">{label}</div>'
-        f'<div style="font-size:10px;color:{C["text_muted"]};margin-top:3px;line-height:1.4;">{nota}</div>'
-        f'</div>'
-        f'<div style="text-align:right;">'
-        f'<div style="font-size:{n_size};font-weight:800;color:{C["investimento"]};'
-        f'font-family:\'Courier New\',monospace;line-height:1;">{fmt_br(invest_pct, 1)}%</div>'
-        f'<div style="font-size:9px;color:{C["text_muted"]};margin-top:2px;">investimento</div>'
-        f'</div>'
-        f'<div style="height:{bar_h};border-radius:8px;overflow:hidden;display:flex;'
-        f'border:1px solid {C["border"]};">'
-        f'<div style="width:{invest_pct:.2f}%;background:linear-gradient(90deg,#14532d,{C["investimento"]});min-width:4px;"></div>'
-        f'<div style="flex:1;background:linear-gradient(90deg,{C["corrente"]},#7f1d1d);"></div>'
-        f'</div>'
-        f'<div>'
-        f'<div style="font-size:{n_size};font-weight:800;color:{C["corrente"]};'
-        f'font-family:\'Courier New\',monospace;line-height:1;">{fmt_br(corrente_pct, 1)}%</div>'
-        f'<div style="font-size:9px;color:{C["text_muted"]};margin-top:2px;">correntes</div>'
-        f'</div>'
-        f'</div>'
-    )
-
-
 def _render_termometro():
     ratio_est = calcular_ratio_investimento_estados(df_est) if tem_est else None
     ratio_mun = calcular_ratio_investimento_municipios(df_mun) if tem_mun else None
 
     r_est = _ratio_esfera(ratio_est)
     r_mun = _ratio_esfera(ratio_mun)
-    r_fed = _ratio_federal(df_rtn) if tem_rtn else None
+    r_fed = ratio_federal(df_rtn) if tem_rtn else None
     r_tot = _ratio_total(r_fed, r_est, r_mun)
 
     # Notas de fonte para cada linha
@@ -337,11 +263,11 @@ def _render_termometro():
         nota_mun = "Fonte: SICONFI · dados não disponíveis"
 
     linhas = (
-        _linha_termometro("Setor Público Total", nota_tot, r_tot, destaque=True)
+        linha_termometro("Setor Público Total", nota_tot, r_tot, destaque=True)
         + f'<div style="height:1px;background:rgba(30,58,95,0.5);margin:8px 0 20px 0;"></div>'
-        + _linha_termometro("Governo Federal",  nota_fed, r_fed)
-        + _linha_termometro("Estados + DF",     nota_est, r_est)
-        + _linha_termometro("Municípios",        nota_mun, r_mun)
+        + linha_termometro("Governo Federal",  nota_fed, r_fed)
+        + linha_termometro("Estados + DF",     nota_est, r_est)
+        + linha_termometro("Municípios",        nota_mun, r_mun)
     )
 
     html = (
@@ -379,17 +305,7 @@ def _render_termometro():
         f'<span style="color:{C["corrente"]};font-weight:600;">despesas correntes e obrigatórias</span>'
         f' (pessoal, previdência, juros)?</div>'
         f'</div>'
-        f'<div style="display:grid;grid-template-columns:200px 80px 1fr 80px;gap:20px;'
-        f'margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid {C["border"]};">'
-        f'<div style="font-size:10px;color:{C["text_muted"]};'
-        f'text-transform:uppercase;letter-spacing:1px;">Esfera</div>'
-        f'<div style="text-align:right;font-size:10px;color:{C["investimento"]};'
-        f'text-transform:uppercase;letter-spacing:1px;">Investimento</div>'
-        f'<div style="text-align:center;font-size:10px;color:{C["text_muted"]};'
-        f'text-transform:uppercase;letter-spacing:1px;">Proporção</div>'
-        f'<div style="font-size:10px;color:{C["corrente"]};'
-        f'text-transform:uppercase;letter-spacing:1px;">Correntes</div>'
-        f'</div>'
+        f'{termometro_header()}'
         f'{linhas}'
         f'</div>'
     )
@@ -411,10 +327,8 @@ def _render_nav_cards():
          "Gastos e investimentos dos 26 estados e DF. Mapa comparativo por UF."),
         ("/municipal", "🏙️", "Municipal",
          "Gastos das capitais estaduais. Mapa municipal com projeção de cobertura total."),
-        ("/projecoes", "🔭", "Projeções",
-         "Trajetória fiscal projetada pelos próximos anos. Cenários de ajuste interativos."),
     ]
-    cols = st.columns(4)
+    cols = st.columns(3)
     for (href, icone, titulo, desc), col in zip(cards, cols):
         with col:
             st.markdown(f"""

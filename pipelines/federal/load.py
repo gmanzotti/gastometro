@@ -20,9 +20,10 @@ O QUE ESTE SCRIPT FAZ?
                (usamos 1.2 em vez de 1.1 porque a 1.1 é uma versão resumida —
                a 1.2 tem mais rubricas desagregadas, permitindo análises futuras)
 
-     INVESTIMENTO PÚBLICO (linha única por aba, dado agregado):
-       1.3   → total de investimento público em R$ correntes
-       1.3-A → total de investimento público em R$ constantes
+     INVESTIMENTO PÚBLICO (todas as rubricas, prefixadas com "INV "):
+       1.3   → investimento público em R$ correntes: total, por função
+               orçamentária e por natureza da despesa (obras, equipamentos...)
+       1.3-A → as mesmas rubricas em R$ constantes
                (o investimento aparece diluído nas rubricas de despesa nas abas
                1.2/1.2-A; as abas 1.3/1.3-A isolam esse dado como agregado,
                o que nos permite separar gastos correntes de investimento)
@@ -56,8 +57,8 @@ SAÍDA:
     ano, mes, data, discriminacao, corrente_milhoes, constante_milhoes, pct_pib
 
   As linhas de investimento (originadas das abas 1.3/1.3-A) aparecem no
-  mesmo parquet, identificadas pela coluna `discriminacao`. Para filtrá-las:
-    df[df["discriminacao"].str.contains("nvestimento", case=False)]
+  mesmo parquet, com o prefixo "INV " na coluna `discriminacao`. Para filtrá-las:
+    df[df["discriminacao"].str.startswith("INV ")]
 
   data/rtn/metadata.json — período-base do deflator IPCA e data do último dado
 
@@ -105,11 +106,13 @@ RTN_DIR.mkdir(parents=True, exist_ok=True)   # cria a pasta se não existir
 DESTINO   = RTN_DIR / "rtn_mensal.parquet"   # arquivo de saída principal
 META_FILE = RTN_DIR / "metadata.json"         # metadados (base IPCA, última data)
 
-# Índice iloc da linha de investimento agregado nas abas 1.3 e 1.3-A.
-# A linha 6 do Excel (1-indexado) corresponde ao iloc[0] porque o cabeçalho
-# ocupa as 5 primeiras linhas (header=4 no pandas, que é 0-indexado).
-# Se o layout do Excel mudar e a linha de investimento se deslocar, ajuste aqui.
-LINHA_INVESTIMENTO = 0
+# Prefixo aplicado às rubricas extraídas das abas 1.3/1.3-A.
+# POR QUE PREFIXAR? A numeração das abas 1.2 e 1.3 colide: "2.1" significa
+# "FPM/FPE/IPI-EE" na aba 1.2, mas "Investimentos (GND 4)" na aba 1.3.
+# Como todas as séries vivem na mesma coluna `discriminacao` do parquet,
+# o prefixo "INV " garante que filtros por str.startswith() nunca misturem
+# rubricas de abas diferentes.
+PREFIXO_INVESTIMENTO = "INV "
 
 
 # ── Etapa 1: Download ─────────────────────────────────────────────────────
@@ -195,7 +198,7 @@ def _melt_mensal(df_wide: pd.DataFrame, col_valor: str) -> pd.DataFrame:
 
 def _extrair_investimento(xl: pd.ExcelFile) -> pd.DataFrame:
     """
-    Extrai a linha de investimento público total das abas 1.3 e 1.3-A.
+    Extrai TODAS as rubricas das abas 1.3 e 1.3-A (investimento público).
 
     POR QUE 1.3 E NÃO 1.2?
       Nas abas 1.2/1.2-A, o investimento aparece como uma entre várias
@@ -205,27 +208,40 @@ def _extrair_investimento(xl: pd.ExcelFile) -> pd.DataFrame:
       investimento (ex: comparar ajuste fiscal via corte de investimento
       vs corte de custeio).
 
-    QUAL LINHA?
-      A linha 6 do Excel (1-indexado) é a primeira linha de dados, logo
-      após o cabeçalho de 5 linhas. Corresponde a iloc[0] no DataFrame
-      resultante do read_excel com header=4.
-      Ela contém o total agregado de investimento público.
-      O nome exato da rubrica (coluna 'discriminacao') vem do próprio Excel.
+    O QUE A ABA 1.3 CONTÉM? (dados a partir de 2008)
+      Seção 1 — Investimento por FUNÇÃO orçamentária:
+        1. INVESTIMENTO TOTAL (1 + 2 + 3)
+        1.1 Investimentos (GND 4) por função (Saúde, Educação, Transporte...)
+        1.2 Inversões Financeiras (GND 5) por função
+        1.3 Ajuste de Ordem Bancária
+      Seção 2 — Memorando: investimento por NATUREZA da despesa:
+        2.1 Investimentos (GND 4): Obras, Equipamentos, Serviços,
+            Transferências a Estados/DF e a Municípios etc.
+        2.2 Inversões Financeiras (GND 5) por ação
+
+    O filtro de _ler_aba_mensal já descarta cabeçalhos de seção e notas de
+    rodapé (linhas sem valor numérico na segunda coluna), então basta ler a
+    aba inteira. Cada rubrica recebe o prefixo "INV " (ver comentário em
+    PREFIXO_INVESTIMENTO) antes de entrar no parquet.
     """
-    # Lê as abas e filtra notas de rodapé (mesma lógica das outras abas)
-    df_corr_wide = _ler_aba_mensal(xl, "1.3").iloc[[LINHA_INVESTIMENTO]]
-    df_cons_wide = _ler_aba_mensal(xl, "1.3-A").iloc[[LINHA_INVESTIMENTO]]
+    # Lê as abas inteiras e filtra notas de rodapé (mesma lógica das outras abas)
+    df_corr_wide = _ler_aba_mensal(xl, "1.3")
+    df_cons_wide = _ler_aba_mensal(xl, "1.3-A")
 
     # Transforma wide → tidy para cada série
     df_c = _melt_mensal(df_corr_wide, "corrente_milhoes")
     df_k = _melt_mensal(df_cons_wide, "constante_milhoes")
 
     # Une as duas séries pelo par (indicador, data)
-    return df_c.merge(
+    df = df_c.merge(
         df_k[["discriminacao", "data", "constante_milhoes"]],
         on=["discriminacao", "data"],
         how="left",
     )
+
+    # Prefixo "INV " evita colisão de numeração com as séries da aba 1.2
+    df["discriminacao"] = PREFIXO_INVESTIMENTO + df["discriminacao"]
+    return df
 
 
 # ── Etapa 3: Cálculo do PIB anual ─────────────────────────────────────────
