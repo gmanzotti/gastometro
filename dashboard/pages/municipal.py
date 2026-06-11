@@ -302,7 +302,7 @@ def _render_categorias(df: pd.DataFrame, cod_ibge_list, ratio_rolling: float, ti
 # ── Montagem ─────────────────────────────────────────────────────────────────
 
 if df_mun.empty:
-    st.info("Execute `python pipelines/municipios/load.py` para carregar os dados.")
+    st.info("Execute `python pipelines/municipios/load_prototipo.py` para carregar os dados.")
     render_footer("SICONFI · Tesouro Nacional · Capitais estaduais · RREO bimestral")
     st.stop()
 

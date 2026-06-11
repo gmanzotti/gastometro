@@ -67,7 +67,7 @@ def _aba_estados():
     if df_est.empty:
         st.info(
             "Dados de estados não encontrados. "
-            "Execute `python pipelines/estados/load.py` para baixar."
+            "Execute `python pipelines/estados/load_prototipo.py` para baixar."
         )
         return
 
@@ -281,7 +281,7 @@ def _aba_municipios():
     if df_mun.empty:
         st.info(
             "Dados de municípios não encontrados. "
-            "Execute `python pipelines/municipios/load.py` (EXTRAIR_TODOS=True) para baixar."
+            "Execute `python pipelines/municipios/load_producao.py` para baixar."
         )
         return
 

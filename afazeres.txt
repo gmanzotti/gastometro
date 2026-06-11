@@ -243,3 +243,114 @@ PRÓXIMOS PASSOS
 [PENDENTE] Aba Projeções: revisar metodologia e expandir cenários
 
 ================================================================================
+
+=== Iniciando sessão de 11/06/2026 ===
+
+--------------------------------------------------------------------------------
+TAREFAS DA SESSÃO
+--------------------------------------------------------------------------------
+
+[FEITO] Redesenhar aba Federal com 6 elementos fixos (esboço do Gustavo):
+        Elemento 1: contador animado em R$ (espelho do hero da aba Geral;
+                    fix flickering via window._cntFedInterval)
+        Elemento 2: linhas correntes (4.1+4.2+4.3) vs discricionárias (4.4.2)
+                    vs investimento+inversões (memo aba 1.2 = total aba 1.3),
+                    acumulado 12m em R$ reais (IPCA), jan/2000+; tracejada p/
+                    investimento; texto explicativo do esboço abaixo
+        Elemento 3: termômetro investimento federal — refatorado: ratio_federal,
+                    linha_termometro e termometro_header movidos de app.py para
+                    components/theme.py (reuso entre Geral e Federal)
+        Elemento 4: composição despesas correntes % (12m): 4.1, 4.2, top-3
+                    rubricas 3-díg de 4.3 (dinâmico: BPC 6,8%, Abono/Seguro 4,5%,
+                    Sentenças 4,0%) + residual "Demais"
+        Elemento 5: composição investimentos % (12m): rubricas INV 2.1.x da
+                    aba 1.3 (Obras 15,9%, Equipamentos 15,5%, Serviços 15,5%,
+                    Transf. Municípios 35,6%...) — só GND 4, exclui inversões
+        Elemento 6: resultado primário acumulado 12m (mantido da versão anterior)
+        - REMOVIDOS da aba (recuperáveis no git): KPIs a/a, gráfico
+          receita×despesa, comparativo detalhado, alertas z-score, explorador
+          de séries, seletor nominal/real/%PIB
+
+[FEITO] Pipeline federal: extrair TODAS as rubricas das abas 1.3/1.3-A
+        (antes só a linha agregada) com prefixo "INV " — necessário para o
+        Elemento 5 (rubricas 2.1.1.1 Obras, 2.1.1.2 Equipamentos, etc.)
+        - Parquet regenerado: séries INV 1.x (por função) e INV 2.x (por
+          natureza) disponíveis de 2008 em diante
+        - Confirmado: memo 'Investimento' (aba 1.2, 1997+) ≡ total da aba 1.3
+          (GND 4 + GND 5 + ajuste OB) — usado no Elemento 2 desde 2000
+
+[FEITO] Rodada de correções na aba Federal (feedback do Gustavo):
+        1. 'correntes' → 'obrigatórias' (exceto Termômetro, onde o conceito
+           é investimento vs resto — mantido 'correntes')
+        2. Título Elemento 2: "Despesas Obrigatórias vs Discricionárias"
+        3. CAUSA RAIZ do hover descasado em todos os gráficos: html{zoom:90%}
+           no CSS global — Plotly não compensa zoom CSS no hit-testing.
+           Removido (página ~11% maior agora). Também corrigido "undefined"
+           no canto dos gráficos (title_font sem título em plotly_dark)
+        4. Elemento 2 em % da Despesa Total (não mais R$)
+        5. Elemento 2 a partir de 2010 (antes de ~2008 discricionárias ≈ 0)
+        6. Rangeslider eliminado; botão '10a' adicionado (todas as páginas)
+        7. Obrigatórias passam a incluir 4.4.1 Controle de Fluxo (linha e
+           composição): 87,4% (2010) → 91,1% (abr/2026) da despesa total
+        8. CAUSA RAIZ de valores subestimados (~2,5%) nas composições:
+           soma de 12 meses em R$ CORRENTES vs tabela 1.2-B da STN em R$
+           CONSTANTES (IPCA). Elementos 2, 4 e 5 migrados para
+           constante_milhoes — valores agora batem com a 1.2-B ao centavo.
+           REGRA GERAL: toda soma de 12m em R$ deve usar constante_milhoes
+        9. Elemento 4: sem residual 'Demais'; top-4 de 4.3 (entra FUNDEB 2,7%)
+
+[FEITO] Elemento 2: texto unificado com o gráfico (mesma seção, gap zero via
+        st.container(key='el2-bloco') + CSS .st-key-el2-bloco{gap:0}); texto
+        novo ("O patamar elevado das despesas obrigatórias comprime...");
+        legenda metodológica removida; texto agora ACIMA do gráfico
+
+[FEITO] Aba Projeções eliminada (decisão do Gustavo, 11/06/2026):
+        - dashboard/pages/projecoes.py deletado (recuperável no git)
+        - Removida de _NAV_PAGES/_PAGE_KEYS (theme.py) e dos cards da home
+          (app.py, agora 3 cards)
+
+[CANCELADO] Aba Projeções: revisar metodologia e expandir cenários
+            (a aba foi eliminada do painel)
+
+[FEITO] Pipelines prontos para produção (extração TI: 5.570 mun. + estados, 2024+):
+        - Renomeados (git mv): pipelines/{estados,municipios}/load.py →
+          load_prototipo.py; criados load_producao.py em ambos
+        - load_producao.py (novidades vs protótipo):
+          1. Checkpoint CSV (checkpoint_{estados,municipios}.csv): 'vazio' de
+             bimestre encerrado há >90 dias é pulado na retomada; 'erro' nunca
+             é pulado (re-rodar o script repesca falhas)
+          2. Isolamento de erros: ValueError (proxy devolve HTML) entra no
+             retry; schema inesperado marca 'erro' e segue — processo de 24h
+             não morre por 1 município
+          3. argparse: --ano-inicio, --intervalo, --no-verify-ssl, --capitais
+             (teste de fumaça, só municípios) — TI não edita código
+          4. requests.Session (reuso de conexão TLS)
+          5. Log em logs/{estados,municipios}_producao.log além do console
+          6. Estimativas corrigidas: municípios 2024+ ≈ 78k req ≈ 24-36h
+             (docstring antigo dizia 4,5 dias p/ 2015+); estados ≈ 7-10 min
+        - federal/load.py NÃO renomeado (pipeline definitivo, sem versão
+          protótipo/produção; renomear quebraria testes e atualizar_dados.py)
+        - Corrigido import quebrado em atualizar_dados.py:
+          pipelines.rtn.load → pipelines.federal.load
+        - Testes atualizados (load → load_prototipo; removidos testes de API
+          antiga: _tipo_demonstrativo, skip de municípios <50k, ANO_INICIO=2015)
+          → 56/56 passando
+        - Mensagens do dashboard atualizadas para load_prototipo.py
+
+[PENDENTE] Validar formato final do dashboard com o chefe
+
+[PENDENTE] Enviar load_producao.py para a TI (instruções no docstring):
+           - python pipelines/estados/load_producao.py (~10 min)
+           - python pipelines/municipios/load_producao.py (~24-36h, retomável)
+           - se houver erros no resumo final, rodar de novo (repesca)
+           - atrás de proxy com certificado próprio: --no-verify-ssl
+
+[PENDENTE] Commitar tudo e enviar aos repositórios (aguardando OK do Gustavo)
+
+[PENDENTE] Avaliar migração para R$ constantes em: Elemento 6 (resultado
+           primário 12m, hoje nominal) e ratio_federal do Termômetro
+           (% de somas nominais; diferença desprezível, mas inconsistente)
+
+[PENDENTE] Verificação visual no browser (Geral + Federal) pelo Gustavo
+
+================================================================================

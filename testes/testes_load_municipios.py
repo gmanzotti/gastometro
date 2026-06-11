@@ -1,5 +1,5 @@
 """
-testes/testes_load_municipios.py  —  Testes para pipelines/municipios/load.py
+testes/testes_load_municipios.py  —  Testes para pipelines/municipios/load_prototipo.py
 ──────────────────────────────────────────────────────────────────────────────
 
 COMO RODAR
@@ -15,7 +15,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pipelines.municipios.load import (
+from pipelines.municipios.load_prototipo import (
+    ANO_INICIO,
     CAPITAIS,
     COLUNAS_DESPESA,
     COLS_SAIDA,
@@ -26,7 +27,6 @@ from pipelines.municipios.load import (
     _combinacoes_ja_carregadas,
     _construir_combinacoes,
     _salvar_lote,
-    _tipo_demonstrativo,
     buscar_entes_municipios,
     buscar_rreo_municipio,
 )
@@ -118,32 +118,14 @@ class TestCapitais:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 2. _tipo_demonstrativo()
-# ══════════════════════════════════════════════════════════════════════════
-
-class TestTipoDemonstrativo:
-    def test_municipio_grande_usa_rreo(self):
-        """Municípios acima do limiar devem usar 'RREO' (Anexo 01 completo)."""
-        assert _tipo_demonstrativo(POP_MINIMA_COMPLETO + 1) == "RREO"
-
-    def test_municipio_pequeno_usa_simplificado(self):
-        """Municípios abaixo do limiar devem usar 'RREO-Simplificado'."""
-        assert _tipo_demonstrativo(POP_MINIMA_COMPLETO - 1) == "RREO-Simplificado"
-
-    def test_exatamente_no_limiar_usa_rreo(self):
-        """No limiar exato, deve usar RREO (>= é completo)."""
-        assert _tipo_demonstrativo(POP_MINIMA_COMPLETO) == "RREO"
-
-
-# ══════════════════════════════════════════════════════════════════════════
 # 3. buscar_entes_municipios()
 # ══════════════════════════════════════════════════════════════════════════
 
 class TestBuscarEntesMunicipios:
     def test_modo_prototipo_retorna_capitais_sem_api(self):
         """No modo protótipo, não deve chamar a API — usa CAPITAIS hardcoded."""
-        with patch("pipelines.municipios.load.EXTRAIR_TODOS", False):
-            with patch("pipelines.municipios.load.requests.get") as mock_get:
+        with patch("pipelines.municipios.load_prototipo.EXTRAIR_TODOS", False):
+            with patch("pipelines.municipios.load_prototipo.requests.get") as mock_get:
                 resultado = buscar_entes_municipios()
 
         mock_get.assert_not_called()
@@ -151,7 +133,7 @@ class TestBuscarEntesMunicipios:
 
     def test_modo_prototipo_contem_todos_os_ufs(self):
         """O DataFrame do protótipo deve ter uma entrada por UF."""
-        with patch("pipelines.municipios.load.EXTRAIR_TODOS", False):
+        with patch("pipelines.municipios.load_prototipo.EXTRAIR_TODOS", False):
             resultado = buscar_entes_municipios()
 
         assert set(resultado["uf"]) == set(CAPITAIS.keys())
@@ -167,8 +149,8 @@ class TestBuscarEntesMunicipios:
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {"items": items}
 
-        with patch("pipelines.municipios.load.EXTRAIR_TODOS", True):
-            with patch("pipelines.municipios.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.municipios.load_prototipo.EXTRAIR_TODOS", True):
+            with patch("pipelines.municipios.load_prototipo.requests.get", return_value=mock_resp):
                 resultado = buscar_entes_municipios()
 
         assert len(resultado) == 2  # apenas municípios (esfera="M")
@@ -180,21 +162,24 @@ class TestBuscarEntesMunicipios:
 
 class TestBuscarRrreoMunicipio:
     def test_retorna_dataframe_com_colunas_corretas(self, rreo_response_ok):
-        with patch("pipelines.municipios.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.municipios.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_municipio(3550308, 2024, 1)
 
         assert set(resultado.columns) == set(COLS_SAIDA)
 
-    def test_municipio_pequeno_retorna_vazio_sem_chamada_api(self):
-        """Municípios pequenos devem ser pulados sem chamar a API."""
-        with patch("pipelines.municipios.load.requests.get") as mock_get:
+    def test_municipio_pequeno_tambem_consulta_api(self, rreo_response_vazia):
+        """Municípios pequenos TAMBÉM são consultados (podem publicar o RREO
+        Completo voluntariamente); os que só publicam o Simplificado retornam
+        vazio e são excluídos do parquet."""
+        with patch("pipelines.municipios.load_prototipo.requests.get",
+                   return_value=rreo_response_vazia) as mock_get:
             resultado = buscar_rreo_municipio(9999999, 2024, 1, populacao=1000)
 
-        mock_get.assert_not_called()
+        mock_get.assert_called_once()
         assert resultado.empty
 
     def test_converte_valor_para_milhoes(self, rreo_response_ok):
-        with patch("pipelines.municipios.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.municipios.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_municipio(3550308, 2024, 1)
 
         # fixture tem valor = 80_000_000_000 → 80_000.0 milhões
@@ -220,20 +205,20 @@ class TestBuscarRrreoMunicipio:
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {"items": items}
 
-        with patch("pipelines.municipios.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.municipios.load_prototipo.requests.get", return_value=mock_resp):
             resultado = buscar_rreo_municipio(3550308, 2024, 1)
 
         assert len(resultado) == 1
         assert resultado["cod_conta"].iloc[0] == "DespesasCorrentes"
 
     def test_retorna_vazio_quando_api_sem_dados(self, rreo_response_vazia):
-        with patch("pipelines.municipios.load.requests.get", return_value=rreo_response_vazia):
+        with patch("pipelines.municipios.load_prototipo.requests.get", return_value=rreo_response_vazia):
             resultado = buscar_rreo_municipio(3550308, 2024, 1)
 
         assert resultado.empty
 
     def test_renomeia_exercicio_para_ano(self, rreo_response_ok):
-        with patch("pipelines.municipios.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.municipios.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_municipio(3550308, 2024, 1)
 
         assert "ano" in resultado.columns
@@ -252,10 +237,10 @@ class TestConstruirCombinacoes:
         assert 3550308 in codigos
         assert 3304557 in codigos
 
-    def test_ano_inicio_e_2015(self, municipios_df):
+    def test_ano_minimo_respeita_ano_inicio(self, municipios_df):
         combinacoes = _construir_combinacoes(municipios_df)
         anos = {c[2] for c in combinacoes}
-        assert min(anos) == 2015
+        assert min(anos) == ANO_INICIO
 
     def test_estrutura_da_tupla(self, municipios_df):
         """Tupla deve ter 4 elementos: (cod_ibge, populacao, ano, periodo)."""
@@ -264,7 +249,7 @@ class TestConstruirCombinacoes:
 
         assert isinstance(cod_ibge, int)
         assert isinstance(populacao, int)
-        assert 2015 <= ano
+        assert ANO_INICIO <= ano
         assert 1 <= periodo <= 6
 
 
@@ -274,7 +259,7 @@ class TestConstruirCombinacoes:
 
 class TestCombinacoesJaCarregadas:
     def test_retorna_set_vazio_se_parquet_nao_existe(self, tmp_path):
-        with patch("pipelines.municipios.load.DESTINO", tmp_path / "nao_existe.parquet"):
+        with patch("pipelines.municipios.load_prototipo.DESTINO", tmp_path / "nao_existe.parquet"):
             resultado = _combinacoes_ja_carregadas()
 
         assert resultado == set()
@@ -295,7 +280,7 @@ class TestCombinacoesJaCarregadas:
         parquet_path = tmp_path / "gastos.parquet"
         df.to_parquet(parquet_path, index=False)
 
-        with patch("pipelines.municipios.load.DESTINO", parquet_path):
+        with patch("pipelines.municipios.load_prototipo.DESTINO", parquet_path):
             resultado = _combinacoes_ja_carregadas()
 
         assert (3550308, 2024, 1) in resultado
@@ -323,7 +308,7 @@ class TestSalvarLote:
 
     def test_cria_parquet_se_nao_existe(self, tmp_path):
         parquet_path = tmp_path / "gastos.parquet"
-        with patch("pipelines.municipios.load.DESTINO", parquet_path):
+        with patch("pipelines.municipios.load_prototipo.DESTINO", parquet_path):
             _salvar_lote([self._df_valido()])
         assert parquet_path.exists()
 
@@ -331,7 +316,7 @@ class TestSalvarLote:
         parquet_path = tmp_path / "gastos.parquet"
         self._df_valido(cod_ibge=3304557).to_parquet(parquet_path, index=False)
 
-        with patch("pipelines.municipios.load.DESTINO", parquet_path):
+        with patch("pipelines.municipios.load_prototipo.DESTINO", parquet_path):
             _salvar_lote([self._df_valido(cod_ibge=3550308)])
             df = pd.read_parquet(parquet_path)
 
@@ -342,7 +327,7 @@ class TestSalvarLote:
         df = self._df_valido()
         df.to_parquet(parquet_path, index=False)
 
-        with patch("pipelines.municipios.load.DESTINO", parquet_path):
+        with patch("pipelines.municipios.load_prototipo.DESTINO", parquet_path):
             _salvar_lote([self._df_valido()])
             df_lido = pd.read_parquet(parquet_path)
 
@@ -360,17 +345,17 @@ class TestConstantes:
 
     def test_contas_identicas_ao_pipeline_estados(self):
         """Garante que os dois pipelines usam as mesmas contas para comparabilidade."""
-        from pipelines.estados.load import CONTAS_DESPESA as CONTAS_ESTADOS
+        from pipelines.estados.load_prototipo import CONTAS_DESPESA as CONTAS_ESTADOS
         assert CONTAS_DESPESA == CONTAS_ESTADOS
 
     def test_colunas_identicas_ao_pipeline_estados(self):
         """Mesmas colunas de execução para permitir concatenar estados + municípios."""
-        from pipelines.estados.load import COLUNAS_DESPESA as COLUNAS_ESTADOS
+        from pipelines.estados.load_prototipo import COLUNAS_DESPESA as COLUNAS_ESTADOS
         assert COLUNAS_DESPESA == COLUNAS_ESTADOS
 
     def test_cols_saida_identicas_ao_pipeline_estados(self):
         """Schema idêntico para facilitar o concat no dashboard."""
-        from pipelines.estados.load import COLS_SAIDA as COLS_ESTADOS
+        from pipelines.estados.load_prototipo import COLS_SAIDA as COLS_ESTADOS
         assert COLS_SAIDA == COLS_ESTADOS
 
     def test_intervalo_requisicao_respeita_rate_limit(self):

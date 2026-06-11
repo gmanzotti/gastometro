@@ -1,7 +1,8 @@
 """
-pipelines/municipios/load.py  —  Gastos municipais via API SICONFI/RREO
+pipelines/municipios/load_prototipo.py  —  Gastos municipais via API SICONFI/RREO
+(versão PROTÓTIPO — desenvolvimento local; para produção use load_producao.py)
 ────────────────────────────────────────────────────────────────────────
-MESMO PRINCÍPIO DO PIPELINE DE ESTADOS (pipelines/estados/load.py),
+MESMO PRINCÍPIO DO PIPELINE DE ESTADOS (pipelines/estados/load_prototipo.py),
 com duas diferenças principais:
 
   1. ESCOPO DE ENTIDADES
@@ -28,8 +29,8 @@ SAÍDA:
   data/municipios/metadata.json
 
 COMO RODAR:
-  Protótipo (capitais):  python pipelines/municipios/load.py
-  Produção (todos):      altere EXTRAIR_TODOS = True e rode o script
+  Protótipo (capitais):  python pipelines/municipios/load_prototipo.py
+  Produção (todos):      use pipelines/municipios/load_producao.py
 """
 
 import json

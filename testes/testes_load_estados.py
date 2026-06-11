@@ -1,5 +1,5 @@
 """
-testes/testes_load_estados.py  —  Testes para pipelines/estados/load.py
+testes/testes_load_estados.py  —  Testes para pipelines/estados/load_prototipo.py
 ────────────────────────────────────────────────────────────────────────
 
 COMO RODAR
@@ -21,7 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pipelines.estados.load import (
+from pipelines.estados.load_prototipo import (
+    ANO_INICIO,
     CONTAS_DESPESA,
     COLUNAS_DESPESA,
     COLS_SAIDA,
@@ -116,7 +117,7 @@ class TestBuscarEntesEstados:
         ]
         mock_resp = self._mock_entes_response(items)
 
-        with patch("pipelines.estados.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=mock_resp):
             resultado = buscar_entes_estados()
 
         assert len(resultado) == 2
@@ -129,7 +130,7 @@ class TestBuscarEntesEstados:
         ]
         mock_resp = self._mock_entes_response(items)
 
-        with patch("pipelines.estados.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=mock_resp):
             resultado = buscar_entes_estados()
 
         assert set(resultado.columns) == {"cod_ibge", "uf", "ente", "populacao"}
@@ -143,7 +144,7 @@ class TestBuscarEntesEstados:
         ]
         mock_resp = self._mock_entes_response(items)
 
-        with patch("pipelines.estados.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=mock_resp):
             resultado = buscar_entes_estados()
 
         assert list(resultado["uf"]) == ["BA", "RJ", "SP"]
@@ -156,7 +157,7 @@ class TestBuscarEntesEstados:
 class TestBuscarRrreoEstado:
     def test_retorna_dataframe_com_colunas_corretas(self, rreo_response_ok):
         """O retorno deve ter exatamente as colunas definidas em COLS_SAIDA."""
-        with patch("pipelines.estados.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert set(resultado.columns) == set(COLS_SAIDA)
@@ -185,7 +186,7 @@ class TestBuscarRrreoEstado:
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {"items": items}
 
-        with patch("pipelines.estados.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=mock_resp):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert len(resultado) == 1
@@ -213,7 +214,7 @@ class TestBuscarRrreoEstado:
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = {"items": items}
 
-        with patch("pipelines.estados.load.requests.get", return_value=mock_resp):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=mock_resp):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert len(resultado) == 1
@@ -221,7 +222,7 @@ class TestBuscarRrreoEstado:
 
     def test_converte_valor_para_milhoes(self, rreo_response_ok):
         """O campo valor_milhoes deve ser valor / 1.000.000."""
-        with patch("pipelines.estados.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         # O fixture tem valor = 100_000_000_000 → deve virar 100_000.0 milhões
@@ -229,7 +230,7 @@ class TestBuscarRrreoEstado:
 
     def test_retorna_vazio_quando_api_sem_dados(self, rreo_response_vazia):
         """Deve retornar DataFrame vazio quando a API não tem dados para o período."""
-        with patch("pipelines.estados.load.requests.get", return_value=rreo_response_vazia):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=rreo_response_vazia):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert resultado.empty
@@ -238,15 +239,15 @@ class TestBuscarRrreoEstado:
         """Deve tentar MAX_TENTATIVAS vezes antes de desistir."""
         from requests.exceptions import ConnectionError as ReqConnError
 
-        with patch("pipelines.estados.load.requests.get", side_effect=ReqConnError("timeout")):
-            with patch("pipelines.estados.load.time.sleep"):  # evita espera real no teste
+        with patch("pipelines.estados.load_prototipo.requests.get", side_effect=ReqConnError("timeout")):
+            with patch("pipelines.estados.load_prototipo.time.sleep"):  # evita espera real no teste
                 resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert resultado.empty
 
     def test_renomeia_exercicio_para_ano(self, rreo_response_ok):
         """A coluna 'exercicio' da API deve ser renomeada para 'ano' no parquet."""
-        with patch("pipelines.estados.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert "ano" in resultado.columns
@@ -254,7 +255,7 @@ class TestBuscarRrreoEstado:
 
     def test_renomeia_instituicao_para_ente(self, rreo_response_ok):
         """A coluna 'instituicao' da API deve ser renomeada para 'ente'."""
-        with patch("pipelines.estados.load.requests.get", return_value=rreo_response_ok):
+        with patch("pipelines.estados.load_prototipo.requests.get", return_value=rreo_response_ok):
             resultado = buscar_rreo_estado(35, 2024, 1)
 
         assert "ente" in resultado.columns
@@ -319,12 +320,12 @@ class TestConstruirCombinacoes:
         if bimestres_ano_atual:
             assert max(bimestres_ano_atual) <= 6  # nunca ultrapassa 6
 
-    def test_ano_inicio_e_2015(self, estados_df):
-        """O ano mais antigo nas combinações deve ser ANO_INICIO (2015)."""
+    def test_ano_minimo_respeita_ano_inicio(self, estados_df):
+        """O ano mais antigo nas combinações deve ser ANO_INICIO."""
         combinacoes = _construir_combinacoes(estados_df)
 
         anos = {c[4] for c in combinacoes}
-        assert min(anos) == 2015
+        assert min(anos) == ANO_INICIO
 
     def test_estrutura_da_tupla(self, estados_df):
         """Cada combinação deve ser uma tupla de 6 elementos."""
@@ -335,7 +336,7 @@ class TestConstruirCombinacoes:
             cod_ibge, uf, ente, populacao, ano, periodo = c
             assert isinstance(cod_ibge, int)
             assert isinstance(uf, str)
-            assert 2015 <= ano
+            assert ANO_INICIO <= ano
             assert 1 <= periodo <= 6
 
 
@@ -346,7 +347,7 @@ class TestConstruirCombinacoes:
 class TestCombinacoesJaCarregadas:
     def test_retorna_set_vazio_se_parquet_nao_existe(self, tmp_path):
         """Se o parquet não existe, deve retornar set vazio."""
-        with patch("pipelines.estados.load.DESTINO", tmp_path / "nao_existe.parquet"):
+        with patch("pipelines.estados.load_prototipo.DESTINO", tmp_path / "nao_existe.parquet"):
             resultado = _combinacoes_ja_carregadas()
 
         assert resultado == set()
@@ -368,7 +369,7 @@ class TestCombinacoesJaCarregadas:
         parquet_path = tmp_path / "gastos.parquet"
         df.to_parquet(parquet_path, index=False)
 
-        with patch("pipelines.estados.load.DESTINO", parquet_path):
+        with patch("pipelines.estados.load_prototipo.DESTINO", parquet_path):
             resultado = _combinacoes_ja_carregadas()
 
         assert (35, 2024, 1) in resultado
@@ -401,7 +402,7 @@ class TestSalvarLote:
         """Se o parquet não existe, deve criar um novo."""
         parquet_path = tmp_path / "gastos.parquet"
 
-        with patch("pipelines.estados.load.DESTINO", parquet_path):
+        with patch("pipelines.estados.load_prototipo.DESTINO", parquet_path):
             _salvar_lote([self._df_valido()])
 
         assert parquet_path.exists()
@@ -413,7 +414,7 @@ class TestSalvarLote:
         df_existente = self._df_valido(cod_ibge=33, ano=2023, periodo=1)
         df_existente.to_parquet(parquet_path, index=False)
 
-        with patch("pipelines.estados.load.DESTINO", parquet_path):
+        with patch("pipelines.estados.load_prototipo.DESTINO", parquet_path):
             _salvar_lote([self._df_valido(cod_ibge=35, ano=2024, periodo=1)])
             df_lido = pd.read_parquet(parquet_path)
 
@@ -426,7 +427,7 @@ class TestSalvarLote:
         df = self._df_valido()
         df.to_parquet(parquet_path, index=False)
 
-        with patch("pipelines.estados.load.DESTINO", parquet_path):
+        with patch("pipelines.estados.load_prototipo.DESTINO", parquet_path):
             # Salva o mesmo registro de novo
             _salvar_lote([self._df_valido()])
             df_lido = pd.read_parquet(parquet_path)
@@ -437,7 +438,7 @@ class TestSalvarLote:
         """Deve retornar o número total de linhas após o save."""
         parquet_path = tmp_path / "gastos.parquet"
 
-        with patch("pipelines.estados.load.DESTINO", parquet_path):
+        with patch("pipelines.estados.load_prototipo.DESTINO", parquet_path):
             n = _salvar_lote([self._df_valido()])
 
         assert n == 1

@@ -83,7 +83,7 @@ def main():
     # A RTN é o relatório oficial mensal publicado pela Secretaria do Tesouro
     # Nacional com todos os dados de receita, despesa e resultado primário do
     # Governo Federal. É a fonte de todos os gráficos do painel.
-    from pipelines.rtn.load import main as rtn_main
+    from pipelines.federal.load import main as rtn_main
     resultados["RTN (Tesouro Nacional)"] = _executar("RTN (Tesouro Nacional)", rtn_main)
 
     # ── Etapa 2: Recalcular o contador fiscal ─────────────────────────────

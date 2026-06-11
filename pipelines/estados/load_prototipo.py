@@ -1,5 +1,6 @@
 """
-pipelines/estados/load.py  —  Gastos dos estados brasileiros via API SICONFI/RREO
+pipelines/estados/load_prototipo.py  —  Gastos estaduais via API SICONFI/RREO
+(versão PROTÓTIPO — desenvolvimento local; para produção use load_producao.py)
 ──────────────────────────────────────────────────────────────────────────────────
 O QUE É O RREO?
   RREO = Relatório Resumido da Execução Orçamentária.
@@ -56,7 +57,7 @@ SAÍDA:
   data/estados/metadata.json — data da última extração, contagem de linhas
 
 COMO RODAR:
-  python pipelines/estados/load.py
+  python pipelines/estados/load_prototipo.py
 """
 
 import json
