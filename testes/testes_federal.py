@@ -1,5 +1,5 @@
 """
-testes/testes_load_rtn.py  —  Testes unitários para pipelines/rtn/load.py
+testes/testes_federal.py  —  Testes unitários para pipelines/federal/load.py
 ──────────────────────────────────────────────────────────────────────────
 
 ESTRUTURA DOS TESTES
@@ -10,15 +10,16 @@ ESTRUTURA DOS TESTES
   3. _ler_aba_anual()         → testa leitura e limpeza de aba anual
   4. _melt_mensal()           → testa transformação wide → tidy
   5. _computar_pib_por_ano()  → testa cálculo do PIB
-  6. _extrair_investimento()  → testa extração da linha de investimento
+  6. _extrair_investimento()  → testa extração das rubricas das abas 1.3/1.3-A
+                                (todas as rubricas, com prefixo "INV ")
   7. transformar()            → teste de ponta a ponta com Excel real em memória
 
 COMO RODAR
   Na raiz do projeto:
-    pytest testes/testes_load_rtn.py -v
+    pytest testes/testes_federal.py -v
 
   Para rodar só um grupo:
-    pytest testes/testes_load_rtn.py -v -k "pib"
+    pytest testes/testes_federal.py -v -k "pib"
 
 DEPENDÊNCIAS DE TESTE
   - pytest (já no requirements.txt)
@@ -40,7 +41,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipelines.federal.load import (
-    LINHA_INVESTIMENTO,
+    PREFIXO_INVESTIMENTO,
     _computar_pib_por_ano,
     _extrair_investimento,
     _ler_aba_anual,
@@ -454,57 +455,66 @@ class TestComputarPibPorAno:
 class TestExtrairInvestimento:
     @pytest.fixture
     def df_raw_inv_corr(self):
-        """Aba 1.3 lida do Excel: duas linhas de dados (só a primeira é o agregado)."""
+        """
+        Aba 1.3 lida do Excel: duas rubricas de dados + uma nota de rodapé.
+        Desde 11/06/2026 o pipeline extrai TODAS as rubricas (não só o agregado),
+        então as duas primeiras linhas devem sobreviver; a nota deve ser filtrada.
+        """
         return pd.DataFrame({
-            "Discriminação": ["Investimento Público", "Investimento - Detalhe"],
-            JAN23:           [20.0,                   15.0],
-            FEV23:           [22.0,                   17.0],
+            "Discriminação": ["1. INVESTIMENTO TOTAL", "2.1.1.1 Obras", "NOTA: Sujeito a revisão"],
+            JAN23:           [20.0,                    15.0,            "nota"],
+            FEV23:           [22.0,                    17.0,            "nota"],
         })
 
     @pytest.fixture
     def df_raw_inv_cons(self):
-        """Aba 1.3-A lida do Excel."""
+        """Aba 1.3-A lida do Excel (mesmas rubricas, R$ constantes)."""
         return pd.DataFrame({
-            "Discriminação": ["Investimento Público", "Investimento - Detalhe"],
-            JAN23:           [19.0,                   14.0],
-            FEV23:           [20.9,                   16.2],
+            "Discriminação": ["1. INVESTIMENTO TOTAL", "2.1.1.1 Obras", "NOTA: Sujeito a revisão"],
+            JAN23:           [19.0,                    14.0,            "nota"],
+            FEV23:           [20.9,                    16.2,            "nota"],
         })
 
-    def test_extrai_apenas_a_primeira_linha(self, df_raw_inv_corr, df_raw_inv_cons):
-        """
-        Deve retornar somente a linha de índice LINHA_INVESTIMENTO (iloc[0]).
-        O agregado de investimento é sempre a primeira linha de dados.
-        """
-        mock_xl = MagicMock(spec=pd.ExcelFile)
-
-        def _fake_read_excel(xl, sheet_name, **kwargs):
-            if sheet_name == "1.3":
-                return df_raw_inv_corr
-            return df_raw_inv_cons
-
-        with patch("pipelines.federal.load.pd.read_excel", side_effect=_fake_read_excel):
-            resultado = _extrair_investimento(mock_xl)
-
-        # 1 indicador × 2 meses = 2 linhas no resultado
-        assert len(resultado) == 2
-        # O indicador deve ser "Investimento Público" (iloc[0]), não o detalhe
-        assert (resultado["discriminacao"] == "Investimento Público").all()
-
-    def test_colunas_do_resultado(self, df_raw_inv_corr, df_raw_inv_cons):
-        """O resultado deve ter as mesmas colunas que o df principal."""
+    @pytest.fixture
+    def resultado(self, df_raw_inv_corr, df_raw_inv_cons):
+        """Executa _extrair_investimento() com as duas abas mockadas."""
         mock_xl = MagicMock(spec=pd.ExcelFile)
 
         def _fake_read_excel(xl, sheet_name, **kwargs):
             return df_raw_inv_corr if sheet_name == "1.3" else df_raw_inv_cons
 
         with patch("pipelines.federal.load.pd.read_excel", side_effect=_fake_read_excel):
-            resultado = _extrair_investimento(mock_xl)
+            return _extrair_investimento(mock_xl)
 
+    def test_extrai_todas_as_rubricas(self, resultado):
+        """Todas as rubricas com valor numérico entram (2 rubricas × 2 meses = 4 linhas)."""
+        assert len(resultado) == 4
+        assert resultado["discriminacao"].nunique() == 2
+
+    def test_filtra_notas_de_rodape(self, resultado):
+        """A linha de nota (sem valor numérico) não pode aparecer no resultado."""
+        assert not resultado["discriminacao"].str.contains("NOTA").any()
+
+    def test_aplica_prefixo_inv(self, resultado):
+        """
+        Toda rubrica recebe o prefixo "INV " — evita colisão de numeração com
+        a aba 1.2 ("2.1" é FPM/FPE na 1.2, mas Investimentos GND 4 na 1.3).
+        """
+        assert resultado["discriminacao"].str.startswith(PREFIXO_INVESTIMENTO).all()
+
+    def test_merge_corrente_constante(self, resultado):
+        """Cada rubrica/mês deve unir o valor corrente (1.3) ao constante (1.3-A)."""
+        obras_jan = resultado[
+            (resultado["discriminacao"] == "INV 2.1.1.1 Obras") &
+            (resultado["data"] == JAN23)
+        ]
+        assert len(obras_jan) == 1
+        assert obras_jan["corrente_milhoes"].iloc[0] == pytest.approx(15.0)
+        assert obras_jan["constante_milhoes"].iloc[0] == pytest.approx(14.0)
+
+    def test_colunas_do_resultado(self, resultado):
+        """O resultado deve ter as mesmas colunas que o df principal de transformar()."""
         assert set(resultado.columns) == {"discriminacao", "data", "corrente_milhoes", "constante_milhoes"}
-
-    def test_linha_investimento_constante_e_zero(self):
-        """LINHA_INVESTIMENTO deve ser 0 (primeira linha de dados = Excel linha 6)."""
-        assert LINHA_INVESTIMENTO == 0
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -522,15 +532,17 @@ class TestTransformar:
         }
         assert set(df.columns) == colunas_esperadas
 
-    def test_inclui_linha_de_investimento(self, excel_rtn_bytes):
-        """O parquet deve conter a rubrica de investimento (das abas 1.3/1.3-A)."""
+    def test_inclui_rubricas_de_investimento(self, excel_rtn_bytes):
+        """As rubricas das abas 1.3/1.3-A devem entrar no parquet com prefixo 'INV '."""
         df, _ = transformar(excel_rtn_bytes)
 
-        tem_investimento = df["discriminacao"].str.contains("Investimento", case=False).any()
-        assert tem_investimento, (
-            "Nenhuma linha de investimento encontrada. "
+        inv = df[df["discriminacao"].str.startswith(PREFIXO_INVESTIMENTO)]
+        assert not inv.empty, (
+            "Nenhuma rubrica 'INV ' encontrada. "
             "Verifique se _extrair_investimento() foi chamado em transformar()."
         )
+        # A rubrica do fixture ("Investimento Público") deve aparecer prefixada
+        assert (inv["discriminacao"] == "INV Investimento Público").any()
 
     def test_inclui_receita_total(self, excel_rtn_bytes):
         """O parquet deve conter a Receita Total (das abas 1.2/1.2-A)."""
