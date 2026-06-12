@@ -360,3 +360,89 @@ TAREFAS DA SESSÃO
 [PENDENTE] Verificação visual no browser (Geral + Federal) pelo Gustavo
 
 ================================================================================
+
+=== Iniciando sessão de 12/06/2026 ===
+
+--------------------------------------------------------------------------------
+TAREFAS DA SESSÃO
+--------------------------------------------------------------------------------
+
+[FEITO] Gerar notas_metodologicas.docx na raiz do projeto:
+        - Documento completo de metodologia, organizado por aba e por elemento
+          (Geral 3 elementos, Federal 6, Estadual 5, Municipal 5)
+        - Para cada elemento: fonte, cálculos e ferramenta de visualização
+        - Seção 0 introdutória: fontes primárias (RTN, SICONFI, IBGE),
+          pipelines, conceitos transversais (liquidado, Lei 4.320, rolling 12m,
+          R$ constantes, dupla contagem) e stack tecnológico
+        - Gerado via python-docx (instalado no env acompanhamento_fiscal);
+          conteúdo extraído do código-fonte (app.py, pages/, theme.py,
+          contador_fiscal.py, pipelines de extração)
+
+--------------------------------------------------------------------------------
+REORGANIZAÇÃO DA DOCUMENTAÇÃO + FASE DE DESPESA (tarde)
+--------------------------------------------------------------------------------
+
+[FEITO] Definir papéis dos documentos (decisão do Gustavo, sem sobreposição):
+        - README.md: público, sucinto (objetivo + métodos)
+        - afazeres.txt: pessoal do Gustavo (log de sessões)
+        - arquitetura.txt: interno Assessoria + TI + Marketing
+        - notas_metodologicas.docx: fonte do FAQ do site (Marketing)
+        - CLAUDE.md (novo): memória do Claude, consultada a cada sessão
+        - RITUAL: revisar/atualizar TODOS os cinco ao fim de cada sessão
+
+[FEITO] Registrar decisões de produto:
+        - Produto final = site HTML/CSS implementado pelo Marketing a partir
+          do protótipo Streamlit (configuração final fora do nosso escopo)
+        - Power BI interno ELIMINADO do projeto
+        - Entregáveis: site público + push WhatsApp/PDF (não iniciado)
+
+[FEITO] Mudar fase de despesa subnacional: liquidado → EMPENHADO:
+        - Pedido original era 'pago' (premissa: número maior, como Gasto Brasil)
+        - MEDIÇÃO mostrou o contrário: no exercício pago ≤ liquidado ≤ empenhado
+          (estados 2025: 1.352 vs 1.392 vs 1.449 R$ bi). O número maior do
+          Gasto Brasil vem de RAP (Anexo 07), não da fase 'pago' do Anexo 01
+        - Decisão do Gustavo: EMPENHADO (mais abrangente, sem re-extração)
+        - Alterados: contador_fiscal.py (COLUNA_FLUXO), theme.py (4 filtros),
+          estadual.py, municipal.py, subnacional.py (COLUNA_PADRAO + labels),
+          app.py (label neutro: contador Geral mistura caixa federal +
+          empenhado subnacional), docstrings de estados/load_prototipo.py
+        - contador_fiscal.json regenerado: total R$ 1.630 bi acc,
+          R$ 146.052/s (antes: R$ 1.133 bi com liquidado)
+        - Testes: 56/56 subnacionais passando
+
+[FEITO] Reescrever README.md (público, sucinto) e arquitetura.txt (interno:
+        camadas, decisões datadas, contrato de dados, pendências TI, WhatsApp)
+
+[FEITO] Criar CLAUDE.md na raiz + atualizar memória persistente
+        (contexto, subnacional, papéis dos documentos, ritual de sessão)
+
+[FEITO] notas_metodologicas.docx atualizado (após fechar o Word):
+        - 10 parágrafos: referências de fase liquidado → empenhado
+        - Bullet "Fase da despesa" reescrito: racional da decisão, comparação
+          com Gasto Brasil (pago + RAP, Anexo 07) e ADENDO PARA O FAQ sobre a
+          pergunta provável da imprensa (empenho de contratos anuais no início
+          do exercício infla bimestres iniciais: B1/2026 estadual +40% vs
+          liquidado; leitura correta = "compromisso assumido", não "desembolso")
+        - Mesmo adendo registrado em arquitetura.txt, seção 5 (p/ Marketing)
+
+[FEITO] Reescrever testes/testes_federal.py para a nova lógica de extração:
+        - Quebra era anterior à sessão: importava LINHA_INVESTIMENTO, removida
+          quando federal/load.py passou a extrair todas as rubricas INV (11/06)
+        - TestExtrairInvestimento reescrito: todas as rubricas, prefixo "INV ",
+          filtro de notas, merge corrente×constante
+        - Teste de integração agora verifica o prefixo "INV " no parquet final
+        - Suíte completa: 89/89 passando (33 federal + 28 estados + 28 municípios)
+        - Nota: pytest não descobre testes_*.py sozinho; rodar com caminhos
+          explícitos ou renomear para test_*.py no futuro
+
+[FEITO] Excluir dashboard/pages/subnacional.py (git rm -f; órfão desde a
+        divisão em estadual.py + municipal.py; recuperável no histórico git)
+
+[PENDENTE] Enviar load_producao.py para a TI (instruções no docstring)
+
+[PENDENTE] Validar formato final do dashboard com o chefe
+
+[PENDENTE] WhatsApp Business API: iniciar aprovação de conta e template
+           (maior lead time do projeto)
+
+================================================================================

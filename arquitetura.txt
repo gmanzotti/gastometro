@@ -1,293 +1,202 @@
 ================================================================================
-SUGESTÕES DE ARQUITETURA — GASTÔMETRO FIESP
-Documento de trabalho — 2026-05-21
-Preparado para reunião com TI
+ARQUITETURA — GASTÔMETRO FIESP
+Documento interno compartilhado entre Assessoria Econômica, TI e Marketing
+Última revisão: 2026-06-12
 ================================================================================
 
+Este documento registra as decisões de arquitetura do projeto e o contrato
+entre as três áreas. Histórico de tarefas: afazeres.txt (uso pessoal da
+Assessoria). Metodologia detalhada por elemento do site: notas_metodologicas.docx.
 
-1. PRODUTO FINAL: O QUE REALMENTE EXISTE E O QUE A PRESIDÊNCIA QUER
+
+1. VISÃO GERAL E DIVISÃO DE RESPONSABILIDADES
 ────────────────────────────────────────────────────────────────────
 
-O dashboard atual (dashboard/app.py) tem 4 abas:
+┌─────────────────────────────────────────────────────────────────┐
+│  FONTES DE DADOS (públicas, oficiais)                           │
+│  • RTN/STN — Excel mensal (esfera federal)                      │
+│  • SICONFI/RREO Anexo 01 — API da STN (estados, DF, municípios) │
+│  • IBGE — malhas geográficas (GeoJSON)                          │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  CAMADA 1 — EXTRAÇÃO E TRANSFORMAÇÃO   [Assessoria: Gustavo]    │
+│  pipelines/ (Python) → arquivos .parquet e .json em data/       │
+│  Código versionado no Azure DevOps (espelhado no GitHub)        │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  CAMADA 2 — INFRAESTRUTURA E EXECUÇÃO  [TI]                     │
+│  • Executa os pipelines no servidor dedicado                    │
+│  • Carga histórica única + agendamento das atualizações         │
+│  • Grava as saídas no Data Lake da FIESP (ADLS Gen2)            │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  CAMADA 3 — FRONTEND PÚBLICO           [Marketing]              │
+│  • Site público em HTML/CSS, consumindo o Data Lake             │
+│  • Implementa as visualizações definidas pela Assessoria,       │
+│    tendo o protótipo Streamlit como referência visual           │
+│  • Publica em domínio FIESP                                     │
+└─────────────────────────────────────────────────────────────────┘
 
-  Tab 0 — Gastos do Governo Federal
-    - Contador em tempo real (HTML+JavaScript que conta R$/segundo)
-    - Card: Despesa Total do mês
-    - Gráficos: composição por categoria e top 5 rubricas (mês e 12m)
-    - Explorador de séries de despesa
-
-  Tab 1 — Observatório Fiscal
-    - 4 KPIs: Receita Líquida, Despesa Total, Resultado Primário, Resultado Nominal
-    - Gráfico: Receita × Despesa × Resultado Primário (linha histórica)
-    - Gráfico: Trajetória Fiscal — Resultado Primário acumulado 12 meses (área)
-    - Gráfico: Resultado Primário acumulado no ano (barras)
-    - Painel de indicadores com variação a/a
-
-  Tab 2 — Alertas (z-score)
-  Tab 3 — Explorador de séries da RTN
-
-O que a presidência quer:
-  (A) Site público com contador + Tab 0, como peça de comunicação
-  (B) Mensagem WhatsApp paga com template + PDF quando a base for atualizada
-
-O que Gustavo propõe para conciliar com a TI:
-  (C) Também entregar um dashboard Power BI interno (só filiados)
+┌─────────────────────────────────────────────────────────────────┐
+│  PROTOTIPAGEM (interno)                [Assessoria]             │
+│  dashboard/ (Streamlit) — referência viva do produto.           │
+│  NÃO é o produto final; não entra em produção.                  │
+│  Deploy de referência: gastometrofiespv1.streamlit.app          │
+└─────────────────────────────────────────────────────────────────┘
 
 
-2. ANÁLISE CRÍTICA DO PLANO
+2. DECISÕES DE ARQUITETURA REGISTRADAS
 ────────────────────────────────────────────────────────────────────
 
-2.1 PONTO FORTE — A DISTINÇÃO DE AUDIÊNCIAS É REAL E DEFENSÁVEL
-  O produto público (A) e o produto interno (C) servem públicos completamente
-  diferentes:
-    Produto A → qualquer pessoa, aberto, advocacy político, imprensa, redes
-    Produto C → filiados, uso interno, dashboards corporativos
-  Isso não é só argumento retórico: tecnicamente, Power BI não pode ser
-  acessado sem login. Streamlit pode ser público. São funções incompatíveis.
-  Essa distinção é o eixo central da estratégia argumentativa na reunião.
+[2026-05-21] Versionamento: Azure DevOps como repositório principal (TI),
+             com push duplo para o GitHub (mantém o deploy do protótipo no
+             Streamlit Community Cloud). Implementado via múltiplas URLs de
+             push no remote origin.
 
-2.2 FALHA LÓGICA CRÍTICA — O CONTADOR NÃO EXISTE EM POWER BI
-  O contador (dashboard/app.py linhas 780–865) é HTML+JavaScript puro:
-  calcula R$/segundo com base em uma taxa pré-computada e atualiza o display
-  a cada 100ms. É o elemento-âncora do produto público — visualmente, é o
-  Gastômetro.
+[2026-06-12] Produto final é o site HTML/CSS do Marketing. O Streamlit é
+             exclusivamente protótipo. A configuração do produto final está
+             fora do escopo da Assessoria.
 
-  Power BI não suporta JavaScript customizado desse tipo. O visual "HTML
-  Content" do Power BI é removido do AppSource há anos por segurança.
-  Plug-ins de terceiros (ex: HTML Viewer) são instáveis e não permitidos em
-  ambientes corporativos com governança de TI. Conclusão: o contador não
-  pode ser replicado em Power BI. Isso, por si só, inviabiliza o Power BI
-  como substituto do produto público.
+[2026-06-12] Power BI interno ELIMINADO do projeto. Entregáveis: site público
+             + push WhatsApp com PDF (ver seção 6).
 
-2.3 FALHA LÓGICA — "ANEXAR O DASHBOARD AO POWER BI DA CASA"
-  Se o Power BI da casa é para filiados (acesso restrito), adicionar o
-  Gastômetro ali não resolve o objetivo da presidência, que é comunicação
-  EXTERNA e aberta. Os dois produtos não são intercambiáveis. Propor os dois
-  em paralelo é correto, mas é preciso deixar claro que o Power BI não
-  substitui o site público — complementa para um público diferente.
-
-2.4 GARGALO TÉCNICO — POWER BI E AUTOMAÇÃO DE DADOS
-  O pipeline atual gera arquivos .parquet e .json em data/. Power BI lê esses
-  formatos, mas com restrições importantes:
-
-    a) Arquivos locais: Power BI Desktop lê, mas Power BI Service (cloud,
-       que é o que os filiados acessam online) NÃO lê arquivos locais
-       diretamente. Precisa de um "gateway de dados" instalado em uma máquina
-       sempre ligada na rede da FIESP, ou os dados precisam estar em:
-       - SharePoint / OneDrive da FIESP
-       - Azure Blob Storage
-       - Azure SQL Database
-       - Qualquer fonte cloud que o Power BI Service suporta nativamente
-
-    b) Atualização automática: o Power BI Service pode agendar refreshes,
-       mas depende da solução de gateway. Sem isso, os dados do Power BI
-       ficam estáticos — atualização manual, o que derrota o propósito.
-
-    c) Conclusão: para o Power BI funcionar de verdade como produto vivo
-       (não congelado), a TI precisaria configurar um gateway ou hospedar
-       os dados em algum serviço Azure. Isso é TRABALHO DA TI, não nosso.
-       Na reunião, deixar claro que essa infraestrutura é responsabilidade
-       do setor de TI, não da Assessoria Econômica.
-
-2.5 GARGALO TÉCNICO — AZURE DEVOPS E STREAMLIT CLOUD
-  Hoje o deploy do Streamlit está em gastometrofiespv1.streamlit.app, que
-  deploya automaticamente a partir do GitHub. Se migrarmos o repositório para
-  Azure DevOps, essa integração automática quebra — Streamlit Community Cloud
-  não conecta com Azure DevOps.
-
-  Soluções possíveis:
-    Opção 1: Manter GitHub + espelhar para Azure DevOps (mirror)
-      - Git suporta múltiplos remotos. Um push vai para os dois.
-      - Streamlit Cloud continua funcionando via GitHub.
-      - TI tem visibilidade e acesso no Azure DevOps.
-      - Custo de implementação: 1 linha de configuração no git.
-
-    Opção 2: Migrar completamente para Azure DevOps + trocar host do site
-      - Sair do Streamlit Cloud para um servidor próprio (ex: Azure App
-        Service, container Docker, VM da FIESP).
-        A TI provavelmente gostaria disso — voltam a ter controle de hosting.
-      - Custo: infra adicional, possível custo de servidor, configuração de
-        CI/CD no Azure DevOps para fazer deploy automático.
-      - Vantagem: tudo dentro do ecossistema Microsoft que a TI já usa.
-
-    Opção 3: Manter GitHub, recusar DevOps
-      - Politicamente mais arriscado dado o contexto.
-      - Desnecessário se a Opção 1 resolve.
-
-  RECOMENDAÇÃO: propor a Opção 1 imediatamente (mirror) e a Opção 2
-  como evolução futura quando o produto estiver estabilizado.
-
-2.6 GARGALO TÉCNICO — GERAÇÃO DO PDF PARA WHATSAPP
-  O plano é enviar um PDF com a Tab 0 (Gastos do Gov Federal), substituindo
-  a seção "Explorador de Despesas" pelo gráfico "Trajetória Fiscal —
-  Resultado Primário acumulado 12 meses" da Tab 1.
-
-  O PDF precisa ser gerado programaticamente (não manualmente) para
-  funcionar junto com a automação de atualização de dados. Opções técnicas:
-
-    a) weasyprint / reportlab: gera PDF a partir de HTML/Python.
-       Pró: leve, sem dependências de browser.
-       Contra: os gráficos Plotly são JavaScript — não renderizam em PDF
-       via weasyprint. Precisariam ser exportados como imagens primeiro
-       (fig.to_image() via kaleido).
-
-    b) playwright / selenium: abre o browser, navega até o dashboard,
-       tira screenshot e converte para PDF.
-       Pró: captura o visual exato do dashboard.
-       Contra: pesado, precisa de browser headless instalado no servidor.
-       O contador JavaScript ficará com o valor do momento do screenshot.
-
-    c) Template HTML estático + kaleido para os gráficos (recomendado):
-       Criar um script que:
-       1. Gera os gráficos Plotly como imagens PNG (fig.to_image())
-       2. Monta um HTML com os grandes números + imagens
-       3. Converte o HTML para PDF com weasyprint
-       Pró: controlado, sem browser, leve, visual próximo ao dashboard.
-       Contra: não é idêntico ao dashboard — é uma versão editorial do PDF.
-
-  RECOMENDAÇÃO: Opção (c). O PDF não precisa ser uma cópia pixel-perfeita
-  do dashboard — pode ser um relatório editorial mais limpo, inclusive mais
-  adequado para envio por WhatsApp (leitores de PDF mobile preferem layouts
-  simples).
-
-2.7 GARGALO TÉCNICO — WHATSAPP BUSINESS API
-  Mensagens proativas (o usuário não iniciou o chat) via WhatsApp exigem:
-
-    a) Conta WhatsApp Business API (não o app comum): precisa de aprovação
-       da Meta e um provedor de acesso, ex: Twilio, 360dialog, Zenvia,
-       ou diretamente a Meta Cloud API.
-
-    b) Templates de mensagem pré-aprovados pela Meta: o template enviado
-       precisa ser submetido e aprovado antes do uso. O processo leva de
-       1 a 7 dias. O template com variáveis dinâmicas (mês, despesas, RP)
-       precisa ser formatado no padrão exato da Meta.
-
-    c) Custo por mensagem: cada mensagem template enviada tem custo
-       (varia por provedor, ~R$ 0,15–0,40/mensagem). Se a lista de contatos
-       for pequena (presidência, equipe, imprensa selecionada), o custo é
-       negligenciável. Se for ampla, precisa de orçamento.
-
-    d) Lista de contatos: os destinatários precisam ter optado por receber
-       mensagens (opt-in). Isso é uma exigência da Meta, não só burocracia.
-       Enviar para contatos sem opt-in pode resultar em bloqueio da conta.
-
-  RECOMENDAÇÃO: Iniciar o processo de aprovação da conta e do template COM
-  URGÊNCIA — é o item com maior lead time do projeto. A automação técnica
-  de envio é simples depois que a conta estiver aprovada.
-
-2.8 RISCO DE DUPLA MANUTENÇÃO
-  Manter site público (Streamlit) E dashboard interno (Power BI) cria dois
-  produtos que precisam evoluir juntos. Toda mudança de metodologia, nova
-  série de dados, ou ajuste visual precisa ser implementada duas vezes.
-
-  Isso é gerenciável agora porque o Power BI é uma concessão à TI, não o
-  produto principal. Mas precisa ficar claro internamente que o Streamlit
-  é o produto master e o Power BI é um derivado. Se a TI tentar inverter
-  essa hierarquia, o risco de fragmentação aumenta.
+[2026-06-12] Fase da despesa subnacional: EMPENHADA (ver seção 5).
 
 
-3. ARQUITETURA PROPOSTA
+3. PIPELINES (Camada 1 — o que a TI executa)
 ────────────────────────────────────────────────────────────────────
 
-CAMADA 1 — DADOS (já existe, manter)
-  Pipeline Python (atualizar_dados.py)
-    → data/rtn/rtn_mensal.parquet
-    → data/contador_fiscal.json
-  Fonte: Tesouro Nacional (RTN)
+atualizar_dados.py                  Ponto de entrada mensal: RTN + contador.
+                                    Agendar p/ dia 15 de cada mês (RTN sai na
+                                    2ª semana). Log em logs/pipeline.log.
 
-CAMADA 2 — PRODUTO PÚBLICO (manter Streamlit)
-  dashboard/app.py → Streamlit Community Cloud (ou Azure App Service)
-  Acesso: público, sem login
-  URL: domínio próprio da FIESP (ex: gastometro.fiesp.com.br)
+pipelines/federal/load.py           Baixa o Excel da RTN (STN), transforma em
+                                    formato tidy. Série mensal desde 1997;
+                                    rubricas de investimento ("INV ") desde 2008.
 
-CAMADA 3 — COMUNICAÇÃO ATIVA (a construir)
-  Script: scripts/gerar_relatorio.py
-    - Gera gráficos como PNG via Plotly/kaleido
-    - Monta HTML do relatório editorial
-    - Converte para PDF via weasyprint
-  Script: scripts/enviar_whatsapp.py
-    - Carrega PDF
-    - Chama API WhatsApp (Twilio ou Meta Cloud API) - (MENSAGENS PRECISARÃO DE APROVAÇÃO: NÃO-AUTOMATIZADAS)
-    - Envia template aprovado + PDF para lista de opt-in
+pipelines/estados/load_producao.py  SICONFI RREO Anexo 01 — 26 estados + DF,
+                                    9 contas de despesa, 3 fases, bimestral.
+                                    2024+ ≈ 7–10 min. Retomável (checkpoint CSV).
 
-  Acionamento: trigger automático ao fim do atualizar_dados.py
-    OU agendado (ex: todo dia 25 do mês, quando RTN costuma sair)
+pipelines/municipios/load_producao.py
+                                    Idem para 5.570 municípios. 2024+ ≈ 78 mil
+                                    requisições ≈ 24–36h. Retomável; erros são
+                                    isolados e repescados em nova execução.
+                                    Teste de fumaça: --capitais (~15 min).
 
-CAMADA 4 — PRODUTO INTERNO (concessão à TI, a construir depois)
-  Power BI Desktop → publicar no Power BI Service da FIESP
-  Fonte de dados: SharePoint/OneDrive com os .parquet atualizados
-    (a TI configura o gateway)
-  Acesso: filiados (autenticado, já existente)
-  Responsável pela infra: TI
-  Responsável pelos dados/layout: Assessoria Econômica
+pipelines/contador_fiscal.py        Consolida as 3 bases no contador_fiscal.json
+                                    (taxa R$/segundo por esfera e por ente).
 
-CAMADA 5 — VERSIONAMENTO
-  Fase 1 (imediato): mirror GitHub → Azure DevOps
-  Fase 2 (futuro): migrar deploy para Azure DevOps + Azure App Service
+Flags úteis (producao): --ano-inicio N  --intervalo S  --no-verify-ssl
+As versões load_prototipo.py são as usadas pela Assessoria localmente.
+
+Periodicidade: RTN mensal; SICONFI bimestral (re-rodar estados/municípios a
+cada bimestre repesca períodos novos e entes atrasados; o checkpoint evita
+reprocessar o que já veio).
 
 
-4. ESTRATÉGIA ARGUMENTATIVA PARA A REUNIÃO
+4. CONTRATO DE DADOS (o que o Marketing consome)
 ────────────────────────────────────────────────────────────────────
 
-4.1 PRINCÍPIO GERAL
-  Não tratar as ferramentas da TI como ameaça nem como imposição. Tratar
-  como complemento válido, desde que o produto público sobreviva intacto.
-  A presidência tem a palavra final — mas a negociação amigável é preferível.
+data/rtn/rtn_mensal.parquet — série fiscal federal
+  ano, mes, data, discriminacao (texto do indicador), corrente_milhoes,
+  constante_milhoes (IPCA — usar SEMPRE em somas de 12 meses), pct_pib.
+  Prefixos úteis: "1. " receita, "4. " despesa, "7. " resultado primário,
+  "8. " resultado nominal, "INV " rubricas de investimento.
 
-4.2 SOBRE O STREAMLIT vs. POWER BI
-  Argumento técnico (não político):
-    "Power BI não suporta contador em tempo real com JavaScript customizado.
-    O contador é o elemento central do produto que a presidência pediu — é o
-    que faz o Gastômetro ser diferente de um dashboard corporativo padrão.
-    Não é uma preferência de ferramenta: é uma limitação técnica objetiva."
+data/estados/gastos_estados.parquet e data/municipios/gastos_municipios.parquet
+  ano, periodo (bimestre 1–6), cod_ibge, uf, ente, populacao, cod_conta,
+  conta, coluna (fase da despesa), valor_milhoes.
+  9 contas (total exceto intra, correntes, pessoal, juros, outras correntes,
+  capital, investimentos, inversões, amortização) × 5 colunas de fase
+  (empenhada e liquidada em fluxo e acumulado; paga em acumulado).
+  FASE PADRÃO DO PAINEL: "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
+  (fluxo: "DESPESAS EMPENHADAS NO BIMESTRE").
 
-  Argumento de audiência:
-    "O site público serve quem não é filiado — imprensa, público geral,
-    governo. Power BI exige login da FIESP. São públicos diferentes, não
-    concorrentes. Podemos ter os dois: o site público fica em Streamlit,
-    e os filiados acessam uma versão interna em Power BI."
+data/contador_fiscal.json — alimenta os contadores em tempo real
+  Blocos: total | federal | estados.{_consolidado, UF...} |
+          municipios.{_consolidado, cod_ibge...}
+  Campos por bloco: taxa_por_segundo_rs (R$/s), acc_base_rs (acumulado-base
+  em R$), start_ms (epoch ms da base — o frontend anima:
+  valor = acc_base_rs + (agora_ms − start_ms)/1000 × taxa_por_segundo_rs),
+  mes/bim_referencia(_fim), ultimo_dado, previsao_total_rs, ratio_rolling.
 
-  Concessão estratégica:
-    "Topo construir o Power BI para os filiados. Mas a infra de gateway e
-    publicação no Service é com a TI — eu entrego os dados no SharePoint."
-
-4.3 SOBRE O AZURE DEVOPS
-  Aceitar imediatamente, com a ressalva do mirror:
-    "Perfeito. Podemos configurar o mirror hoje — o código vai para o Azure
-    DevOps automaticamente a cada push. O GitHub fica só como ponto de
-    deploy do Streamlit Cloud. Quando mudarmos o hosting, desligamos o
-    GitHub."
-
-4.4 SOBRE O WHATSAPP
-  Apresentar como demanda da presidência (não nossa):
-    "O envio de mensagens via WhatsApp quando a base atualiza foi pedido
-    explicitamente. Já sabemos que é pago — precisamos definir quem aprova
-    o orçamento e quem registra a conta Business na Meta."
-
-  Isso coloca a TI no papel de parceiro para resolver, não de obstáculo.
-
-4.5 SEQUENCIAMENTO SUGERIDO PARA NEGOCIAR
-  Prioridade 1 (fazer agora, não depende da TI):
-    - Mirror GitHub → Azure DevOps
-    - Iniciar aprovação WhatsApp Business API
-
-  Prioridade 2 (fazer logo, produto público):
-    - Hospedar site em domínio FIESP (pode ser Streamlit Cloud com domínio
-      customizado, ou Azure App Service se a TI preferir)
-
-  Prioridade 3 (fazer depois, concessão à TI):
-    - Power BI interno, com dados no SharePoint
-    - TI configura gateway de dados
+data/estados_geojson.json (1,1 MB) e data/municipios_geojson.json (53,5 MB)
+  Malhas IBGE para os mapas coropléticos.
 
 
-5. RESUMO DOS RISCOS PRINCIPAIS
+5. DECISÕES METODOLÓGICAS (resumo — detalhe no notas_metodologicas.docx)
 ────────────────────────────────────────────────────────────────────
 
-  [ALTO]   WhatsApp API: lead time de aprovação (1–7 dias). Iniciar agora.
-  [ALTO]   Power BI sem gateway: dados congelados, produto morto. TI resolve.
-  [MÉDIO]  Mirror GitHub/DevOps: simples, mas precisa não quebrar deploy.
-  [MÉDIO]  Dupla manutenção Streamlit + Power BI: aceitar só se TI assumir
-           a responsabilidade pelo Power BI (dados + infra).
-  [BAIXO]  Geração de PDF: tecnicamente resolvível com kaleido + weasyprint.
+Fase da despesa subnacional: EMPENHADA (decisão 2026-06-12).
+  Racional: o painel dimensiona o volume do gasto público; adota-se a fase
+  mais abrangente do ciclo (no exercício, empenhado ≥ liquidado ≥ pago).
+  Medição 2025 (estados): empenhado R$ 1.449 bi, liquidado R$ 1.392 bi,
+  pago R$ 1.352 bi. Os parquets guardam as 3 fases — trocar a fase é
+  alterar constantes no dashboard/contador, sem re-extração.
+  Federal (RTN) segue regime de caixa da STN (metodologia própria).
+  Referência externa: o painel Gasto Brasil usa "efetivamente pago"
+  incluindo Restos a Pagar (RREO Anexo 07) — números não diretamente
+  comparáveis.
+
+  ATENÇÃO — COMUNICAÇÃO (Marketing): governos costumam empenhar contratos
+  anuais logo no início do exercício, então em bimestres iniciais o
+  acumulado empenhado supera com folga o liquidado (estados, B1/2026:
+  R$ 611 bi empenhados vs R$ 436 bi liquidados, ~+40%). A leitura correta
+  é "compromisso de gasto já assumido pelo governo", e NÃO "dinheiro já
+  desembolsado". Pergunta provável de imprensa e leitores — o FAQ do site
+  deve antecipá-la (texto-base no notas_metodologicas.docx, seção 0).
+
+Investimento público = Investimentos + Inversões Financeiras (Lei 4.320/64);
+  exclui Amortização da Dívida.
+
+Contador: projeção por ratio rolling 12 meses sobre o mesmo período do ano
+  anterior; bimestres não entregues ao SICONFI imputados por sazonalidade
+  histórica (ratio B_n/B_{n-1}, 3 anos). DF tem esfera='D' no SICONFI e é
+  incluído manualmente entre os estados.
+
+Deflacionamento: somas de 12 meses sempre em R$ constantes (IPCA).
+
+
+6. COMUNICAÇÃO ATIVA — WHATSAPP + PDF (a construir)
+────────────────────────────────────────────────────────────────────
+
+Objetivo: quando a base atualizar, enviar mensagem WhatsApp com PDF-resumo
+para lista de contatos com opt-in (demanda da presidência).
+
+Decisão técnica (mantida de 2026-05-21):
+  PDF: template HTML estático + gráficos Plotly exportados como PNG (kaleido)
+  + conversão com weasyprint. Versão editorial, não cópia do site.
+  Envio: WhatsApp Business API (Meta Cloud API ou provedor: Twilio/Zenvia/
+  360dialog). Templates precisam de aprovação prévia da Meta (1–7 dias).
+  Custo por mensagem ~R$ 0,15–0,40. Opt-in obrigatório (exigência da Meta).
+
+Status: NÃO INICIADO. Maior lead time do projeto é a aprovação da conta e do
+template — iniciar antes da automação.
+
+
+7. PENDÊNCIAS DE INFRAESTRUTURA (TI)
+────────────────────────────────────────────────────────────────────
+
+[ ] Executar a carga histórica subnacional no servidor:
+      python pipelines/estados/load_producao.py        (~10 min)
+      python pipelines/municipios/load_producao.py     (~24–36h, retomável)
+    Atrás de proxy com certificado próprio: --no-verify-ssl
+    Se houver erros no resumo final, rodar de novo (repesca automática).
+
+[ ] SSL: os downloads usam verify=False (proxy FIESP com certificado
+    self-signed). Em produção, instalar o certificado raiz corporativo no
+    servidor ou liberar as URLs (STN/SICONFI/IBGE) no proxy, e remover o
+    contorno do código.
+
+[ ] Data Lake: pipelines hoje gravam em data/ local. Para produção, definir
+    storage account, container e autenticação (Managed Identity) do ADLS Gen2;
+    a Assessoria adapta a escrita.
+
+[ ] Agendamento: atualizar_dados.py mensal (dia 15, 9h); pipelines SICONFI a
+    cada bimestre.
 
 ================================================================================
