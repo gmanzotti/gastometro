@@ -555,7 +555,7 @@ def calcular_ratio_investimento_estados(df_estados: pd.DataFrame) -> pd.DataFram
     if df_estados.empty:
         return pd.DataFrame()
     df = df_estados[
-        df_estados["coluna"] == "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
+        df_estados["coluna"] == "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
     ].copy()
     return _rolling12_siconfi(df)
 
@@ -565,7 +565,7 @@ def calcular_ratio_investimento_municipios(df_municipios: pd.DataFrame) -> pd.Da
     if df_municipios.empty:
         return pd.DataFrame()
     df = df_municipios[
-        df_municipios["coluna"] == "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
+        df_municipios["coluna"] == "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
     ].copy()
     return _rolling12_siconfi(df)
 
@@ -574,7 +574,7 @@ def calcular_serie_estado(
     df_estados: pd.DataFrame,
     cod_ibge: int,
     cod_conta: str,
-    coluna: str = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)",
+    coluna: str = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)",
 ) -> pd.DataFrame:
     """Retorna série temporal para um estado e conta específicos."""
     df = (
@@ -719,7 +719,7 @@ def termometro_header(cols_grid: str = "200px 80px 1fr 80px") -> str:
 
 def calcular_scatter_correntes_invest(
     df: pd.DataFrame,
-    coluna: str = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)",
+    coluna: str = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)",
 ) -> pd.DataFrame:
     """Rolling 12 m: correntes, invest e total por entidade — para scatter do elemento 4."""
     df_f = df[df["coluna"] == coluna].copy()

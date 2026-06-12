@@ -39,10 +39,12 @@ CLASSIFICAÇÃO DE INVESTIMENTO (Lei 4.320/1964, Art. 12):
 ESTÁGIOS DE EXECUÇÃO DAS DESPESAS:
   O RREO reporta a despesa em três estágios (todos salvos no parquet):
     - Empenhada: orçamento comprometido (autorizado, serviço ainda não entregue)
-    - Liquidada: bem/serviço entregue e verificado (base padrão para comparação)
+    - Liquidada: bem/serviço entregue e verificado
     - Paga: efetivamente transferida (pode diferir por Restos a Pagar)
 
-  Para análises fiscais comparativas, use "DESPESAS LIQUIDADAS ATÉ O BIMESTRE".
+  Fase padrão do painel (decisão de 12/06/2026): "DESPESAS EMPENHADAS ATÉ O
+  BIMESTRE (f)" — fase mais abrangente do ciclo (empenhado ≥ liquidado ≥ pago
+  no exercício), adequada ao objetivo de advocacy do Gastômetro.
 
 ESCALA E TEMPO DE EXECUÇÃO:
   - 27 entidades (26 estados + DF)
@@ -124,7 +126,7 @@ CONTAS_DESPESA = {
 
 # ── Estágios de execução a salvar (confirmados via API real) ───────────────────
 # Salvamos todos os estágios para dar flexibilidade nas análises.
-# O mais usado para comparação fiscal é "DESPESAS LIQUIDADAS ATÉ O BIMESTRE".
+# Fase padrão do painel: "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)" (12/06/2026).
 COLUNAS_DESPESA = {
     "DESPESAS EMPENHADAS NO BIMESTRE",
     "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)",

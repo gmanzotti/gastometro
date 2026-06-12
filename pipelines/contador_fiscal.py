@@ -60,8 +60,10 @@ SAIDA           = DATA_DIR / "contador_fiscal.json"
 # ── Filtros SICONFI ───────────────────────────────────────────────────────
 # Conta total de despesas (exclui intra-orçamentárias, evita dupla contagem interna)
 COD_CONTA_TOTAL = "DespesasExcetoIntraOrcamentarias"
-# Coluna de fluxo bimestral (não cumulativa) — análogo ao dado mensal da RTN
-COLUNA_FLUXO    = "DESPESAS LIQUIDADAS NO BIMESTRE"
+# Coluna de fluxo bimestral (não cumulativa) — análogo ao dado mensal da RTN.
+# Fase EMPENHADA (decisão de 12/06/2026): painel de advocacy usa a fase mais
+# abrangente do ciclo da despesa (empenhado ≥ liquidado ≥ pago no exercício).
+COLUNA_FLUXO    = "DESPESAS EMPENHADAS NO BIMESTRE"
 
 # ── Filtro RTN ────────────────────────────────────────────────────────────
 PREFIXO_DESP_RTN = "4. "   # "4. DESPESA TOTAL" na RTN

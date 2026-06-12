@@ -124,7 +124,7 @@ def _render_hero():
 
   <div style="font-size:11px;color:{C['text_muted']};margin-bottom:32px;opacity:0.85;">
     Federal · Estados + DF · Municípios &nbsp;·&nbsp;
-    Despesas liquidadas acumuladas no ano, projetadas ao segundo
+    Despesas acumuladas no ano, projetadas ao segundo
   </div>
 
   <!-- Divisor -->

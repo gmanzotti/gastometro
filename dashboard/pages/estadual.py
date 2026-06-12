@@ -33,7 +33,7 @@ dados  = carregar_dados()
 df_est = dados.get("estados", pd.DataFrame())
 cont   = dados.get("contador", {})
 
-COLUNA_PADRAO = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
+COLUNA_PADRAO = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
 
 CATS_COMP = [
     ("PessoalEEncargosSociais",  "Pessoal e Encargos",    C["corrente"]),
@@ -83,7 +83,7 @@ def _render_contador_animado(cont_data: dict, label: str):
     font-family:'Courier New',monospace;letter-spacing:-2px;line-height:1;
     margin-bottom:14px;">R$&nbsp;{initial_str}</div>
   <div style="font-size:11px;color:{C['text_muted']};line-height:1.8;">
-    Despesas liquidadas acumuladas no ano, projetadas ao segundo<br/>
+    Despesas empenhadas acumuladas no ano, projetadas ao segundo<br/>
     Último dado: <b style="color:{C['text_dim']}">{ult}</b>
     &nbsp;·&nbsp;
     Projetado até {ref}: <b style="color:{C['accent']}">{meta_str}</b>
