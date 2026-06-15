@@ -557,4 +557,10 @@ LEGENDAS E NOMENCLATURA (clareza p/ TI e Marketing)
 
 [FEITO] 89/89 testes seguem passando; compilação dos módulos do dashboard OK.
 
+[FEITO] arquitetura.txt (seção 3, Pipelines): adicionado bloco "Tempos de
+        execução do SICONFI" com estimativas de carga HISTÓRICA (estados 7–10
+        min; municípios 24–36h) e INCREMENTAL por bimestre (estados ~1 min;
+        municípios ~2h + re-rodadas decrescentes por ~3 meses p/ retardatários)
+        e agendamento sugerido p/ a TI. Tempo = nº requisições × 1,1s (rate limit).
+
 ================================================================================

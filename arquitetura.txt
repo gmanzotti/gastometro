@@ -97,6 +97,36 @@ Periodicidade: RTN mensal; SICONFI bimestral (re-rodar estados/municípios a
 cada bimestre repesca períodos novos e entes atrasados; o checkpoint evita
 reprocessar o que já veio).
 
+Tempos de execução do SICONFI (estados e municípios)
+- O gargalo é o rate limit da API (~1 req/s; intervalo padrão 1,1s). O tempo é
+  essencialmente nº de requisições × 1,1s — a rede manda, não o processamento.
+
+  Carga HISTÓRICA (1ª execução, --ano-inicio 2024, medido em jun/2026):
+    Estados    27 entes × ~14 bimestres ≈    380 req  →  7–10 min
+    Municípios ~5.570    × ~14 bimestres ≈ 78.000 req  →  ~24h (planejar 24–36h)
+  Combinada: como rodam separados, o gargalo é o municipal (~24–36h); o de
+  estados é desprezível perto disso. Sugestão: rodar estados primeiro (10 min)
+  e deixar o municipal à parte — ele é retomável (pode interromper e continuar).
+
+  Carga INCREMENTAL (um bimestre novo; o checkpoint pula tudo que já veio):
+    Estados    27 entes × 1 bimestre =    27 req  →  ~1 min
+    Municípios ~5.570    × 1 bimestre = 5.570 req  →  ~1h40 (planejar ~2h)
+
+- Ressalva do municipal incremental: os ~2h são UMA rodada. A maioria dos
+  municípios pequenos (<50 mil hab.) publica o RREO com atraso e volta "vazio"
+  logo após o fechamento do bimestre. O script re-consulta vazios recentes
+  (últimos 90 dias — DIAS_VAZIO_DEFINITIVO) e só os trata como definitivos
+  depois disso. Na prática, capturar um bimestre municipal completo é
+  "~2h na 1ª rodada + algumas re-rodadas decrescentes ao longo de ~3 meses"
+  para incorporar os retardatários (cada re-rodada só reconsulta os ainda
+  vazios, ficando mais curta conforme publicam). Nos estados isso quase não
+  pesa (poucos atrasam, ex.: AM e SC), então o incremental estadual é ~1 min.
+
+- Agendamento sugerido p/ a TI: incremental ESTADUAL com frequência alta (é
+  barato, pode ser semanal); incremental MUNICIPAL mensal nos ~3 meses
+  seguintes a cada fechamento de bimestre, para ir incorporando retardatários
+  sem refazer o que já entrou.
+
 
 4. CONTRATO DE DADOS (o que o Marketing consome)
 ────────────────────────────────────────────────────────────────────
