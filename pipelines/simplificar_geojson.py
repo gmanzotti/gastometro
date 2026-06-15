@@ -1,5 +1,5 @@
 """
-pipelines/simplificar_geojson.py  —  Aligeira as malhas GeoJSON dos coropléticos
+pipelines/simplificar_geojson.py  —  Aligeira as malhas GeoJSON dos mapas interativos
 ─────────────────────────────────────────────────────────────────────────────
 POR QUE ISSO EXISTE:
   Os mapas (aba Estadual e Municipal) recebem o GeoJSON CRU dentro da figura
@@ -133,7 +133,7 @@ def simplificar_geojson(caminho_entrada: Path, caminho_saida: Path, tolerancia: 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Simplifica as malhas GeoJSON dos coropléticos.")
+    parser = argparse.ArgumentParser(description="Simplifica as malhas GeoJSON dos mapas interativos.")
     parser.add_argument("--tol-estados", type=float, default=TOL_ESTADOS_PADRAO,
                         help=f"Tolerância em graus para os estados (padrão {TOL_ESTADOS_PADRAO}).")
     parser.add_argument("--tol-municipios", type=float, default=TOL_MUNICIPIOS_PADRAO,

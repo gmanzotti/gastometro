@@ -125,13 +125,13 @@ data/contador_fiscal.json — alimenta os contadores em tempo real
   mes/bim_referencia(_fim), ultimo_dado, previsao_total_rs, ratio_rolling.
 
 data/estados_geojson.json (1,1 MB) e data/municipios_geojson.json (~56 MB)
-  Malhas IBGE CRUAS para os mapas coropléticos (fonte-de-verdade).
+  Malhas IBGE CRUAS para os mapas interativos (fonte-de-verdade).
 
 data/estados_geojson_simplificado.json (0,25 MB) e
 data/municipios_geojson_simplificado.json (3,6 MB)
   Malhas LEVES (Douglas-Peucker via shapely, pipelines/simplificar_geojson.py).
   O dashboard prefere estas (ordem: simplificado > cru > API IBGE). A malha
-  municipal crua de 56 MB era a causa principal de lentidão dos coropléticos:
+  municipal crua de 56 MB era a causa principal de lentidão dos mapas interativos:
   o Plotly serializa o GeoJSON inteiro na figura e o envia ao navegador a cada
   load. Simplificar cortou -93,5% (municípios) e -77% (estados) sem perda visual
   no zoom nacional. Reprocessar quando o IBGE reatualizar as malhas cruas.
@@ -161,6 +161,13 @@ Fase da despesa subnacional: EMPENHADA (decisão 2026-06-12).
 
 Investimento público = Investimentos + Inversões Financeiras (Lei 4.320/64);
   exclui Amortização da Dívida.
+
+Barra "Investimento vs Despesas Correntes e Obrigatórias" (decisão 2026-06-15):
+  a fatia não-investimento é calculada por COMPLEMENTO (total − investimento)
+  nas três abas, para sempre somar 100%. Não se usa a conta contábil
+  "Despesas Correntes" porque ela exclui a Amortização da Dívida (4.3), que
+  não é investimento nem corrente — isso fazia a barra subnacional não fechar
+  (~2,3% nos estados). Rótulo unificado; detalhe no notas_metodologicas.docx.
 
 Contador: projeção por ratio rolling 12 meses sobre o mesmo período do ano
   anterior; bimestres não entregues ao SICONFI imputados por sazonalidade

@@ -443,7 +443,7 @@ def carregar_geojson_estados() -> dict | None:
     """Carrega GeoJSON dos estados: simplificado > cru > API do IBGE.
 
     Preferimos a malha simplificada (gerada por pipelines/simplificar_geojson.py),
-    bem mais leve, que é o que torna o coroplético rápido de carregar. Se ela não
+    bem mais leve, que é o que torna o mapa interativo rápido de carregar. Se ela não
     existir, caímos no arquivo cru; por último, baixamos do IBGE.
     """
     for nome in ("estados_geojson_simplificado.json", "estados_geojson.json"):
@@ -733,7 +733,8 @@ def calcular_scatter_correntes_invest(
     df: pd.DataFrame,
     coluna: str = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)",
 ) -> pd.DataFrame:
-    """Rolling 12 m: correntes, invest e total por entidade — para scatter do elemento 4."""
+    """Rolling 12 m por entidade: investimento, total e o complemento (correntes
+    e obrigatórias) — usado nas barras e tabelas das abas estadual/municipal."""
     df_f = df[df["coluna"] == coluna].copy()
     if df_f.empty:
         return pd.DataFrame()
@@ -766,18 +767,26 @@ def calcular_scatter_correntes_invest(
         m[col] = m["curr"].where(~tem, m["curr"] + m["b6"] - m["bx"])
         return m[["cod_ibge", "uf", "ente", col]]
 
-    correntes = _roll({"DespesasCorrentes"}, "correntes_milhoes")
-    invest    = _roll({"Investimentos", "InversoesFinanceiras"}, "invest_milhoes")
-    total     = _roll({"DespesasExcetoIntraOrcamentarias"}, "total_milhoes")
+    invest = _roll({"Investimentos", "InversoesFinanceiras"}, "invest_milhoes")
+    total  = _roll({"DespesasExcetoIntraOrcamentarias"}, "total_milhoes")
 
-    m = (
-        correntes
-        .merge(invest[["cod_ibge", "invest_milhoes"]], on="cod_ibge", how="inner")
-        .merge(total[["cod_ibge", "total_milhoes"]],   on="cod_ibge", how="inner")
-    )
+    m = invest.merge(total[["cod_ibge", "total_milhoes"]], on="cod_ibge", how="inner")
     m = m[m["total_milhoes"] > 0].copy()
-    m["invest_ratio"]    = (m["invest_milhoes"]  / m["total_milhoes"] * 100).round(2)
-    m["correntes_share"] = (m["correntes_milhoes"] / m["total_milhoes"] * 100).round(2)
+
+    # "Despesas correntes e obrigatórias" = TUDO que não é investimento produtivo,
+    # definido por COMPLEMENTO (total − investimento). Assim investimento +
+    # correntes/obrigatórias somam 100% por construção, igual ao termômetro da
+    # aba Geral (ver linha_termometro, que faz corrente_pct = 100 − invest_pct).
+    #
+    # POR QUE NÃO usamos a conta contábil "DespesasCorrentes" aqui: ela é a
+    # categoria 3 da Lei 4.320 (pessoal + juros + outras correntes) e NÃO inclui
+    # a Amortização da Dívida (categoria 4.3), que é despesa de capital mas
+    # também não é investimento. Se somássemos só "correntes estritas" +
+    # investimento, faltaria justamente a amortização (~2,3% nos estados) e a
+    # barra não fecharia 100%. O complemento reincorpora a amortização ao lado
+    # de pessoal, juros e custeio.
+    m["correntes_obrig_milhoes"] = m["total_milhoes"] - m["invest_milhoes"]
+    m["invest_ratio"] = (m["invest_milhoes"] / m["total_milhoes"] * 100).round(2)
     m["ano"]     = max_ano
     m["periodo"] = max_bim
     return m.sort_values("invest_ratio", ascending=False).reset_index(drop=True)

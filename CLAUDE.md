@@ -91,6 +91,15 @@ testes/                          pytest (89 testes) — rodar após mudanças co
     sem abertura por categoria econômica) — não comparável diretamente.
 - **Investimento = Investimentos (4.1) + Inversões Financeiras (4.2)**
   (Lei 4.320/64); Amortização da Dívida excluída.
+- **Dicotomia investimento × "despesas correntes e obrigatórias" por COMPLEMENTO**
+  (decisão 15/06/2026): a fatia vermelha = `Total − Investimento`, nas três abas,
+  para sempre somar 100%. NÃO usar a conta contábil `DespesasCorrentes` na barra,
+  pois ela exclui a Amortização da Dívida (4.3) — que não é investimento nem
+  corrente — e fazia a barra subnacional não fechar (~2,3% nos estados). O
+  complemento reincorpora a amortização. Centralizado em
+  `calcular_scatter_correntes_invest` (coluna `correntes_obrig_milhoes`); aba Geral
+  já usava complemento (`linha_termometro`). Rótulo unificado: "Despesas correntes
+  e obrigatórias". Federal mantém só "correntes" (nota própria nas notas metodológicas).
 - **Rolling 12 meses** para ratios de investimento (neutraliza sazonalidade).
 - **Toda soma de 12m em R$ deve usar `constante_milhoes`** (IPCA) — somas
   nominais subestimam vs tabelas da STN (~2,5%).

@@ -108,7 +108,7 @@ def _render_contador_animado(cont_data: dict, label: str):
 """, unsafe_allow_javascript=True)
 
 
-def _render_coropletico(ratio_df: pd.DataFrame, uf_sel: str) -> tuple[int, int]:
+def _render_mapa_interativo(ratio_df: pd.DataFrame, uf_sel: str) -> tuple[int, int]:
     ano_max = int(ratio_df["ano"].iloc[0])
     per_max = int(ratio_df["periodo"].iloc[0])
 
@@ -165,14 +165,14 @@ def _render_coropletico(ratio_df: pd.DataFrame, uf_sel: str) -> tuple[int, int]:
 
 
 def _render_invest_correntes(scatter_df: pd.DataFrame, uf_sel: str):
-    """Barra invest vs correntes para o ente selecionado (estilo termômetro da aba Geral)."""
+    """Barra invest vs correntes e obrigatórias para o ente (estilo termômetro Geral)."""
     if scatter_df.empty:
         st.info("Sem dados suficientes.")
         return
 
     if uf_sel == "Consolidado":
         inv_mi  = float(scatter_df["invest_milhoes"].sum())
-        cor_mi  = float(scatter_df["correntes_milhoes"].sum())
+        cor_mi  = float(scatter_df["correntes_obrig_milhoes"].sum())
         tot_mi  = float(scatter_df["total_milhoes"].sum())
         nome    = "Todos os Estados (consolidado)"
     else:
@@ -181,7 +181,7 @@ def _render_invest_correntes(scatter_df: pd.DataFrame, uf_sel: str):
             st.info(f"Sem dados para {uf_sel}.")
             return
         inv_mi  = float(row["invest_milhoes"].iloc[0])
-        cor_mi  = float(row["correntes_milhoes"].iloc[0])
+        cor_mi  = float(row["correntes_obrig_milhoes"].iloc[0])
         tot_mi  = float(row["total_milhoes"].iloc[0])
         nome    = str(row["ente"].iloc[0])
 
@@ -229,10 +229,10 @@ def _render_tabela_comparativa(scatter_df: pd.DataFrame):
     if scatter_df.empty:
         return
     _section_title("Comparativo — todos os estados")
-    df_tab = scatter_df[["uf", "ente", "invest_ratio", "correntes_milhoes", "invest_milhoes", "total_milhoes"]].copy()
-    df_tab.columns = ["UF", "Estado", "Invest. %", "Correntes (R$ mi)", "Invest. (R$ mi)", "Total (R$ mi)"]
-    df_tab["Invest. %"]         = df_tab["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
-    df_tab["Correntes (R$ mi)"] = df_tab["Correntes (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    df_tab = scatter_df[["uf", "ente", "invest_ratio", "correntes_obrig_milhoes", "invest_milhoes", "total_milhoes"]].copy()
+    df_tab.columns = ["UF", "Estado", "Invest. %", "Corr. e obrig. (R$ mi)", "Invest. (R$ mi)", "Total (R$ mi)"]
+    df_tab["Invest. %"]              = df_tab["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
+    df_tab["Corr. e obrig. (R$ mi)"] = df_tab["Corr. e obrig. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
     df_tab["Invest. (R$ mi)"]   = df_tab["Invest. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
     df_tab["Total (R$ mi)"]     = df_tab["Total (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
     st.dataframe(df_tab, hide_index=True, width="stretch", height=380)
@@ -302,10 +302,10 @@ ratio_rolling = cont_data.get("ratio_rolling", 1.0)
 # ── Elemento 2: Contador animado ─────────────────────────────────────────────
 _render_contador_animado(cont_data, label_cnt)
 
-# ── Elemento 3: Coroplético ───────────────────────────────────────────────────
+# ── Elemento 3: Mapa interativo ───────────────────────────────────────────────
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 ano_max, per_max = (
-    _render_coropletico(ratio_df, uf_sel)
+    _render_mapa_interativo(ratio_df, uf_sel)
     if not ratio_df.empty else (2026, 2)
 )
 
@@ -314,7 +314,7 @@ st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 col4, col5 = st.columns(2)
 
 with col4:
-    _section_title("Investimento vs Gastos Correntes")
+    _section_title("Investimento vs Despesas Correntes e Obrigatórias")
     _render_invest_correntes(scatter_df, uf_sel)
     _render_tabela_comparativa(scatter_df)
 

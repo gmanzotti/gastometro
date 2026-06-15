@@ -500,4 +500,61 @@ PERFORMANCE DOS COROPLÉTICOS (mapas estadual e municipal lentos)
 [PENDENTE] Reprocessar *_simplificado.json sempre que as malhas cruas do IBGE
            forem reatualizadas (rodar pipelines/simplificar_geojson.py).
 
+--------------------------------------------------------------------------------
+PADRONIZAÇÃO DA BARRA INVESTIMENTO vs CORRENTES (somar 100% nas 3 abas)
+--------------------------------------------------------------------------------
+
+[FEITO] Diagnosticar por que a barra somava 100% na aba Geral mas NÃO nas abas
+        estadual/municipal (estados: 9,5% + 88,2% = 97,7%; faltavam ~2,3%):
+        - Geral (linha_termometro): correntes = 100 − investimento (COMPLEMENTO)
+          → embute a amortização, soma 100% por construção.
+        - Estadual/municipal: correntes = conta contábil 'DespesasCorrentes'
+          (categoria 3 da Lei 4.320), que EXCLUI a Amortização da Dívida (4.3).
+        - Verificado numericamente no parquet: Correntes 88,22% + Invest 9,46%
+          + Amortização 2,30% = 99,98%. O buraco era exatamente a amortização.
+
+[FEITO] Padronizar pela OPÇÃO 1 (complemento) nas três abas:
+        - theme.py/calcular_scatter_correntes_invest: removida a leitura da conta
+          DespesasCorrentes; nova coluna correntes_obrig_milhoes = total − invest.
+        - estadual.py e municipal.py: barra e tabela passam a usar a nova coluna;
+          % correntes e obrig. = 100 − % invest. Resultado: 9,5% + 90,5% = 100%.
+        - Rótulo unificado "Despesas Correntes e Obrigatórias" (títulos de seção e
+          colunas de tabela "Corr. e obrig. (R$ mi)").
+        - Sublabel compacto "correntes" mantido (igual à aba Geral).
+
+[FEITO] Ressalva de advocacy registrada: a amortização é pagamento de principal
+        (desalavancagem), não custeio; juntá-la ao "não-investimento" é defensável
+        mas pode ser questionado. São ~2,3%; ter resposta pronta.
+
+[FEITO] notas_metodologicas.docx atualizado p/ o Marketing (python-docx):
+        - Títulos dos Elementos 4 (estadual/municipal) e do Termômetro Geral
+          renomeados p/ "Despesas Correntes e Obrigatórias".
+        - Fonte e cálculos reescritos: explicação didática do complemento e do
+          porquê de não usar a conta 'DespesasCorrentes' (amortização 4.3).
+        - Federal mantém a nota própria ("correntes", não "obrigatórias").
+
+[FEITO] 89/89 testes passando após as mudanças.
+
+[PENDENTE] Verificação visual do Gustavo: confirmar 100% nas barras das 3 abas.
+
+--------------------------------------------------------------------------------
+LEGENDAS E NOMENCLATURA (clareza p/ TI e Marketing)
+--------------------------------------------------------------------------------
+
+[FEITO] Cards "Explorar o Gastômetro" (app.py/_render_nav_cards): removidas as
+        descrições desatualizadas abaixo de Federal/Estadual/Municipal; ícone
+        aumentado (28px → 52px) e título (16px → 24px); conteúdo centralizado.
+
+[FEITO] Substituir o termo técnico "coroplético" por "mapa interativo" em todo o
+        produto e docs ativos (evitar confusão com TI/Marketing):
+        - UI: legenda do mapa municipal.
+        - Código: função _render_coropletico → _render_mapa_interativo (estadual
+          e municipal), comentários de seção, docstrings (theme.py, pipeline).
+        - Docs: arquitetura.txt e notas_metodologicas.docx (títulos dos Elementos
+          3 e a seção 0.4 de stack). Mantido o identificador real "Choroplethmapbox"
+          (nome da função Plotly) — é referência técnica, não o jargão português.
+        - Log histórico do afazeres.txt preservado como estava (registro de época).
+
+[FEITO] 89/89 testes seguem passando; compilação dos módulos do dashboard OK.
+
 ================================================================================

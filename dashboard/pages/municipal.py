@@ -133,7 +133,7 @@ def _gerar_dados_sinteticos(geojson: dict, ratio_reais: pd.DataFrame) -> pd.Data
     return pd.DataFrame(rows)
 
 
-def _render_coropletico(ratio_reais: pd.DataFrame):
+def _render_mapa_interativo(ratio_reais: pd.DataFrame):
     ano_max = int(ratio_reais["ano"].iloc[0]) if not ratio_reais.empty else 2026
     per_max = int(ratio_reais["periodo"].iloc[0]) if not ratio_reais.empty else 1
 
@@ -143,7 +143,7 @@ def _render_coropletico(ratio_reais: pd.DataFrame):
         f"⚠ dados sintéticos — protótipo visual</span>"
     )
     st.caption(
-        "Coroplético demonstrativo: valores gerados artificialmente com base nas médias "
+        "Mapa interativo demonstrativo: valores gerados artificialmente com base nas médias "
         "das capitais estaduais. O painel de detalhe abaixo usa dados reais das capitais."
     )
 
@@ -183,14 +183,14 @@ def _render_coropletico(ratio_reais: pd.DataFrame):
 
 
 def _render_invest_correntes(scatter_df: pd.DataFrame, cod_ibge_sel: int | None, label: str):
-    """Barra invest vs correntes para o município/consolidado selecionado."""
+    """Barra invest vs correntes e obrigatórias para o município/consolidado."""
     if scatter_df.empty:
         st.info("Sem dados suficientes.")
         return
 
     if cod_ibge_sel is None:
         inv_mi = float(scatter_df["invest_milhoes"].sum())
-        cor_mi = float(scatter_df["correntes_milhoes"].sum())
+        cor_mi = float(scatter_df["correntes_obrig_milhoes"].sum())
         tot_mi = float(scatter_df["total_milhoes"].sum())
         nome   = "Todas as Capitais (consolidado)"
     else:
@@ -199,7 +199,7 @@ def _render_invest_correntes(scatter_df: pd.DataFrame, cod_ibge_sel: int | None,
             st.info("Sem dados para o município selecionado.")
             return
         inv_mi = float(row["invest_milhoes"].iloc[0])
-        cor_mi = float(row["correntes_milhoes"].iloc[0])
+        cor_mi = float(row["correntes_obrig_milhoes"].iloc[0])
         tot_mi = float(row["total_milhoes"].iloc[0])
         nome   = str(row["ente"].iloc[0])
 
@@ -257,10 +257,10 @@ def _render_tabela_comparativa(scatter_df: pd.DataFrame, uf_sel: str):
         titulo = f"Capitais disponíveis — {uf_sel}"
 
     _section_title(titulo)
-    df_tab = df_tab_base[["uf", "ente", "invest_ratio", "correntes_milhoes", "invest_milhoes", "total_milhoes"]].copy()
-    df_tab.columns = ["UF", "Capital", "Invest. %", "Correntes (R$ mi)", "Invest. (R$ mi)", "Total (R$ mi)"]
-    df_tab["Invest. %"]         = df_tab["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
-    df_tab["Correntes (R$ mi)"] = df_tab["Correntes (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
+    df_tab = df_tab_base[["uf", "ente", "invest_ratio", "correntes_obrig_milhoes", "invest_milhoes", "total_milhoes"]].copy()
+    df_tab.columns = ["UF", "Capital", "Invest. %", "Corr. e obrig. (R$ mi)", "Invest. (R$ mi)", "Total (R$ mi)"]
+    df_tab["Invest. %"]              = df_tab["Invest. %"].apply(lambda v: f"{fmt_br(v, 1)}%")
+    df_tab["Corr. e obrig. (R$ mi)"] = df_tab["Corr. e obrig. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
     df_tab["Invest. (R$ mi)"]   = df_tab["Invest. (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
     df_tab["Total (R$ mi)"]     = df_tab["Total (R$ mi)"].apply(lambda v: f"{fmt_br(v, 0)}")
     st.dataframe(df_tab, hide_index=True, width="stretch", height=380)
@@ -346,16 +346,16 @@ ratio_rolling = cont_data.get("ratio_rolling", 1.0)
 # ── Elemento 2: Contador animado ─────────────────────────────────────────────
 _render_contador_animado(cont_data, label_cnt)
 
-# ── Elemento 3: Coroplético ───────────────────────────────────────────────────
+# ── Elemento 3: Mapa interativo ───────────────────────────────────────────────
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
-_render_coropletico(ratio_reais)
+_render_mapa_interativo(ratio_reais)
 
 # ── Elementos 4 + 5 lado a lado ──────────────────────────────────────────────
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
 col4, col5 = st.columns(2)
 
 with col4:
-    _section_title("Investimento vs Gastos Correntes")
+    _section_title("Investimento vs Despesas Correntes e Obrigatórias")
     _render_invest_correntes(scatter_df, mun_cod, label_cnt)
     _render_tabela_comparativa(scatter_df, uf_sel)
 

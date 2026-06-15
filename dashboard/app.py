@@ -321,29 +321,23 @@ def _render_nav_cards():
         unsafe_allow_html=True,
     )
     cards = [
-        ("/federal",   "📊", "Federal",
-         "Receita, despesa e resultado primário. Composição dos gastos e alertas de anomalias."),
-        ("/estadual",  "🗺️", "Estadual",
-         "Gastos e investimentos dos 26 estados e DF. Mapa comparativo por UF."),
-        ("/municipal", "🏙️", "Municipal",
-         "Gastos das capitais estaduais. Mapa municipal com projeção de cobertura total."),
+        ("/federal",   "📊", "Federal"),
+        ("/estadual",  "🗺️", "Estadual"),
+        ("/municipal", "🏙️", "Municipal"),
     ]
     cols = st.columns(3)
-    for (href, icone, titulo, desc), col in zip(cards, cols):
+    for (href, icone, titulo), col in zip(cards, cols):
         with col:
             st.markdown(f"""
 <a href="{href}" style="text-decoration:none;" target="_self">
   <div style="
     background:{C['bg2']};border:1px solid {C['border']};border-radius:14px;
-    padding:28px 24px;cursor:pointer;transition:border-color 0.2s;height:160px;
-    display:flex;flex-direction:column;justify-content:space-between;
+    padding:32px 24px;cursor:pointer;transition:border-color 0.2s;height:160px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
   " onmouseover="this.style.borderColor='{C['primary']}'"
      onmouseout="this.style.borderColor='{C['border']}'">
-    <div>
-      <div style="font-size:28px;margin-bottom:10px;">{icone}</div>
-      <div style="font-size:16px;font-weight:700;color:{C['text']};margin-bottom:6px;">{titulo}</div>
-      <div style="font-size:12px;color:{C['text_dim']};line-height:1.5;">{desc}</div>
-    </div>
+    <div style="font-size:52px;line-height:1;">{icone}</div>
+    <div style="font-size:24px;font-weight:700;color:{C['text']};">{titulo}</div>
   </div>
 </a>
 """, unsafe_allow_html=True)
