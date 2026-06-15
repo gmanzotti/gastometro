@@ -440,10 +440,16 @@ def carregar_dados() -> dict:
 
 @st.cache_data(ttl=86400)
 def carregar_geojson_estados() -> dict | None:
-    """Carrega GeoJSON dos estados: tenta arquivo local, depois API do IBGE."""
-    local = DATA_DIR / "estados_geojson.json"
-    if local.exists():
-        return json.loads(local.read_text(encoding="utf-8"))
+    """Carrega GeoJSON dos estados: simplificado > cru > API do IBGE.
+
+    Preferimos a malha simplificada (gerada por pipelines/simplificar_geojson.py),
+    bem mais leve, que é o que torna o coroplético rápido de carregar. Se ela não
+    existir, caímos no arquivo cru; por último, baixamos do IBGE.
+    """
+    for nome in ("estados_geojson_simplificado.json", "estados_geojson.json"):
+        local = DATA_DIR / nome
+        if local.exists():
+            return json.loads(local.read_text(encoding="utf-8"))
     url = (
         "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR"
         "?resolucao=2&intrarregiao=UF&formato=application/vnd.geo%2Bjson"
@@ -460,10 +466,16 @@ def carregar_geojson_estados() -> dict | None:
 
 @st.cache_data(ttl=86400, show_spinner="Carregando malha municipal…")
 def carregar_geojson_municipios() -> dict | None:
-    """Carrega GeoJSON de todos os municípios: arquivo local primeiro, depois IBGE."""
-    local = DATA_DIR / "municipios_geojson.json"
-    if local.exists():
-        return json.loads(local.read_text(encoding="utf-8"))
+    """Carrega GeoJSON dos municípios: simplificado > cru > API do IBGE.
+
+    A malha municipal crua tem ~56 MB e é a principal causa de lentidão do
+    painel. A versão simplificada (pipelines/simplificar_geojson.py) tem ~3,6 MB.
+    Se nenhuma existir localmente, baixamos a malha completa do IBGE.
+    """
+    for nome in ("municipios_geojson_simplificado.json", "municipios_geojson.json"):
+        local = DATA_DIR / nome
+        if local.exists():
+            return json.loads(local.read_text(encoding="utf-8"))
     url = (
         "https://servicodados.ibge.gov.br/api/v3/malhas/paises/BR"
         "?resolucao=1&intrarregiao=municipio&formato=application/vnd.geo%2Bjson"

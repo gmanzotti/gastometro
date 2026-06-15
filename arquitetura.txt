@@ -124,8 +124,17 @@ data/contador_fiscal.json — alimenta os contadores em tempo real
   valor = acc_base_rs + (agora_ms − start_ms)/1000 × taxa_por_segundo_rs),
   mes/bim_referencia(_fim), ultimo_dado, previsao_total_rs, ratio_rolling.
 
-data/estados_geojson.json (1,1 MB) e data/municipios_geojson.json (53,5 MB)
-  Malhas IBGE para os mapas coropléticos.
+data/estados_geojson.json (1,1 MB) e data/municipios_geojson.json (~56 MB)
+  Malhas IBGE CRUAS para os mapas coropléticos (fonte-de-verdade).
+
+data/estados_geojson_simplificado.json (0,25 MB) e
+data/municipios_geojson_simplificado.json (3,6 MB)
+  Malhas LEVES (Douglas-Peucker via shapely, pipelines/simplificar_geojson.py).
+  O dashboard prefere estas (ordem: simplificado > cru > API IBGE). A malha
+  municipal crua de 56 MB era a causa principal de lentidão dos coropléticos:
+  o Plotly serializa o GeoJSON inteiro na figura e o envia ao navegador a cada
+  load. Simplificar cortou -93,5% (municípios) e -77% (estados) sem perda visual
+  no zoom nacional. Reprocessar quando o IBGE reatualizar as malhas cruas.
 
 
 5. DECISÕES METODOLÓGICAS (resumo — detalhe no notas_metodologicas.docx)

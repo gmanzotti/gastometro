@@ -438,11 +438,66 @@ REORGANIZAÇÃO DA DOCUMENTAÇÃO + FASE DE DESPESA (tarde)
 [FEITO] Excluir dashboard/pages/subnacional.py (git rm -f; órfão desde a
         divisão em estadual.py + municipal.py; recuperável no histórico git)
 
+[FEITO] Commit e push em 12/06/2026 (Azure DevOps + GitHub):
+        - 8999269 pipelines+dashboard: fase de despesa subnacional muda de
+          liquidado para empenhado (inclui contador regenerado e exclusão
+          do subnacional.py)
+        - bdac41f testes: reescreve testes federais (rubricas INV), 89/89
+        - e6cb936 docs: reorganiza documentação por público; cria CLAUDE.md
+        - cb08c1b merge do commit c39c562 (Dev Container, criado pelo Gustavo
+          na interface do GitHub em 12/06 — GitHub estava 1 commit à frente;
+          merge convergiu os dois remotos sem reescrever histórico)
+        - Fora do commit: rascunhos/ (material do Gustavo)
+        - Streamlit Cloud redeploya automaticamente a partir do GitHub
+
+[PENDENTE] Verificação visual do Gustavo no Streamlit deployado (fase
+           empenhada: contador total R$ 1.630 bi, abas Estadual/Municipal)
+
 [PENDENTE] Enviar load_producao.py para a TI (instruções no docstring)
 
 [PENDENTE] Validar formato final do dashboard com o chefe
 
 [PENDENTE] WhatsApp Business API: iniciar aprovação de conta e template
            (maior lead time do projeto)
+
+================================================================================
+
+=== Iniciando sessão de 15/06/2026 ===
+
+--------------------------------------------------------------------------------
+PERFORMANCE DOS COROPLÉTICOS (mapas estadual e municipal lentos)
+--------------------------------------------------------------------------------
+
+[FEITO] Diagnosticar a lentidão: os mapas passam o GeoJSON CRU para o Plotly
+        Choroplethmapbox, que serializa a malha inteira na figura e a envia ao
+        navegador a cada load. Vilão = malha municipal de 56 MB (5.570 polígonos,
+        ~2,58 mi de vértices). Estados eram só 1,1 MB. NÃO havia geopandas no
+        caminho (o pedido original assumia um GeoDataFrame que não existe aqui).
+
+[FEITO] Criar pipelines/simplificar_geojson.py — pré-processamento offline que
+        reduz vértices com Douglas-Peucker via shapely (mesmo motor do
+        geopandas.simplify, sem a stack pesada do GDAL). tolerance em GRAUS
+        (CRS = EPSG:4326); padrão 0.01° (~1,1 km, imperceptível no zoom nacional).
+        - Lê as malhas cruas, grava *_simplificado.json (cruas preservadas como
+          fonte-de-verdade p/ reprocessar com outra tolerância).
+        - Resultados: estados 1,11 MB → 0,25 MB (-77%);
+          municípios 56,13 MB → 3,64 MB (-93,5%).
+        - Decisão de engenharia: shapely é dependência só de DESENVOLVIMENTO; o
+          dashboard em produção lê apenas o JSON já leve, então a TI não instala
+          nada novo no servidor.
+
+[FEITO] Atualizar os dois loaders em dashboard/components/theme.py para preferir
+        a malha simplificada (ordem: simplificado > cru > API do IBGE).
+
+[FEITO] Validar integridade: 27 estados e 5.570 municípios preservados, propriedade
+        'codarea' (featureidkey do Plotly) intacta. Geometrias inválidas até
+        DIMINUÍRAM (herdadas da fonte IBGE): estados 2→1, municípios 11→1 — o
+        painel já renderizava as cruas com mais defeitos, Plotly tolera.
+
+[PENDENTE] Verificação visual do Gustavo: confirmar que os mapas carregam rápido
+           e que o formato continua reconhecível no Streamlit.
+
+[PENDENTE] Reprocessar *_simplificado.json sempre que as malhas cruas do IBGE
+           forem reatualizadas (rodar pipelines/simplificar_geojson.py).
 
 ================================================================================

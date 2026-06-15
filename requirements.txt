@@ -16,3 +16,6 @@ python-dotenv>=1.0.0     # Carrega TRANSPARENCIA_API_KEY do arquivo .env
 # ── Desenvolvimento / Testes ───────────────────────────────────────
 pytest>=7.4.0
 openpyxl>=3.1.0          # Engine para criar/ler .xlsx nos testes de integração
+shapely>=2.0            # SÓ p/ pipelines/simplificar_geojson.py (pré-processa as
+                        # malhas dos mapas). NÃO é dependência de runtime: o
+                        # dashboard lê o JSON já simplificado. TI não precisa instalar.

@@ -55,6 +55,10 @@ pipelines/municipios/            SICONFI → data/municipios/gastos_municipios.p
   load_producao.py               versão p/ TI: 5.570 municípios, ~24-36h, retomável
 pipelines/contador_fiscal.py     consolida as 3 bases → data/contador_fiscal.json
                                  (acc + taxa R$/s por esfera e por ente; imputação sazonal)
+pipelines/simplificar_geojson.py reduz vértices das malhas (Douglas-Peucker via
+                                 shapely) → data/*_geojson_simplificado.json
+                                 (municípios 56MB→3,6MB; rodar quando o IBGE
+                                 reatualizar as malhas; shapely é dep só de dev)
 atualizar_dados.py               ponto de entrada (federal + contador)
 dashboard/app.py                 aba Geral (contador hero, termômetro, 3 cards)
 dashboard/pages/federal.py       6 elementos fixos
