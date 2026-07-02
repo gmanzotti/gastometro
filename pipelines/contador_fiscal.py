@@ -87,6 +87,17 @@ def _proximo_bimestre(ano: int, bim: int) -> tuple[int, int]:
     return (ano + 1, 1) if bim == 6 else (ano, bim + 1)
 
 
+def _bimestre_corrente(hoje: datetime | None = None) -> tuple[int, int]:
+    """Bimestre do calendário em que 'hoje' cai. B1=jan/fev … B6=nov/dez.
+
+    Usado para o alvo da projeção: projetamos SEMPRE até o bimestre em curso no
+    calendário, nunca o ano fechado (regra do "intervalo móvel do próximo
+    bimestre"). Ex.: 2 de julho → mês 7 → (7+1)//2 = bimestre 4.
+    """
+    d = hoje or datetime.now()
+    return d.year, (d.month + 1) // 2
+
+
 def _segundos_bimestre(ano: int, bim: int) -> int:
     """Total de segundos no par de meses do bimestre."""
     m1 = _BIM_MES_INI[bim]
@@ -202,7 +213,7 @@ def calcular_federal(df_rtn: pd.DataFrame) -> dict:
 
 # ── Núcleo bimestral (reutilizado por estados e municípios) ───────────────
 
-def _calcular_bloco_bimestral(serie: dict, label: str) -> dict | None:
+def _calcular_bloco_bimestral(serie: dict, label: str, hoje: datetime | None = None) -> dict | None:
     """
     Ratio rolling 6 bimestres sobre uma série bimestral arbitrária.
 
@@ -237,46 +248,71 @@ def _calcular_bloco_bimestral(serie: dict, label: str) -> dict | None:
         log.warning("[%s] Ratio fora da faixa [0.5, 3.0]: %.4f", label, ratio)
         return None
 
-    # Bimestres a projetar
+    # ── Bimestres a projetar (regra do "intervalo móvel até o bimestre corrente")
+    # Projetamos do primeiro bimestre após o último dado real ATÉ o bimestre em
+    # curso no calendário — nunca o ano fechado. Ex.: último real = B2 e hoje
+    # estamos em B4 → projeta B3 e B4. Quando o B3 é publicado, projeta só B4. Só
+    # passa a incluir B5 quando o calendário entra em set/out. Isso minimiza o
+    # horizonte projetado (menor erro) e evita divulgar projeção anual fechada.
     ultimo_ano, ultimo_bim = all_keys[-1]
-    ano_t1, bim_t1 = _proximo_bimestre(ultimo_ano, ultimo_bim)
-    ano_t2, bim_t2 = _proximo_bimestre(ano_t1, bim_t1)
+    ano_alvo, bim_alvo = _bimestre_corrente(hoje)
 
-    # Âncoras sazonais: mesmo bimestre do ano anterior
-    base_t1 = (ano_t1 - 1, bim_t1)
-    base_t2 = (ano_t2 - 1, bim_t2)
+    bimestres_proj: list[tuple[int, int]] = []
+    a, b = _proximo_bimestre(ultimo_ano, ultimo_bim)
+    while (a, b) <= (ano_alvo, bim_alvo) and len(bimestres_proj) < 6:
+        bimestres_proj.append((a, b))
+        a, b = _proximo_bimestre(a, b)
 
-    if base_t1 not in serie or base_t2 not in serie:
-        log.warning("[%s] Sem âncora sazonal: t1=%s t2=%s", label, base_t1, base_t2)
+    if not bimestres_proj:
+        # O dado real já cobre (ou passa) o bimestre corrente: nada a projetar.
+        # O contador fica estático no realizado do ano corrente.
+        acc_rs = sum(
+            serie.get((ultimo_ano, bb), 0.0) for bb in range(1, ultimo_bim + 1)
+        ) * 1_000_000
+        return {
+            "taxa_por_segundo_rs": 0.0,
+            "acc_base_rs":         round(acc_rs, 2),
+            "start_ms":            _start_ms_bim(ultimo_ano, ultimo_bim),
+            "bim_referencia":      f"{ultimo_ano}-B{ultimo_bim}",
+            "bim_referencia_fim":  f"{ultimo_ano}-B{ultimo_bim}",
+            "ultimo_dado":         f"{ultimo_ano}-B{ultimo_bim}",
+            "ratio_rolling":       round(ratio, 6),
+            "previsao_total_rs":   0.0,
+        }
+
+    # Âncoras sazonais: cada bimestre projetado usa o MESMO bimestre do ano
+    # anterior (captura a sazonalidade daquele bimestre específico — inclusive a
+    # arrancada de investimento de nov/dez quando o alvo chega a B6).
+    ancoras = [(ap - 1, bp) for (ap, bp) in bimestres_proj]
+    faltando = [k for k in ancoras if k not in serie]
+    if faltando:
+        log.warning("[%s] Sem âncora sazonal para: %s", label, faltando)
         return None
 
-    pago_t1 = serie[base_t1]
-    pago_t2 = serie[base_t2]
-
-    if pago_t1 <= 0 or pago_t2 <= 0:
-        log.warning("[%s] Âncora inválida: t1=%.2f t2=%.2f", label, pago_t1, pago_t2)
+    soma_ancoras = sum(serie[k] for k in ancoras)
+    if soma_ancoras <= 0:
+        log.warning("[%s] Âncoras somam ≤ 0: %.2f", label, soma_ancoras)
         return None
 
-    previsao_rs = (pago_t1 + pago_t2) * ratio * 1_000_000
-    seg_t1 = _segundos_bimestre(ano_t1, bim_t1)
-    seg_t2 = _segundos_bimestre(ano_t2, bim_t2)
-    taxa   = previsao_rs / (seg_t1 + seg_t2)
+    previsao_rs = soma_ancoras * ratio * 1_000_000
+    segundos    = sum(_segundos_bimestre(ap, bp) for (ap, bp) in bimestres_proj)
+    taxa        = previsao_rs / segundos
 
-    # acc_base: bimestres do ano corrente antes de T+1
+    # acc_base: realizado do ano corrente antes do primeiro bimestre projetado.
+    ano_t1, bim_t1 = bimestres_proj[0]
     if bim_t1 == 1:
-        # T+1 é B1 do próximo ano → todo o ano anterior já está confirmado
-        ano_ref = ano_t1 - 1
-        acc_rs  = sum(serie.get((ano_ref, b), 0.0) for b in range(1, 7)) * 1_000_000
+        # Primeiro projetado é B1 → todo o ano anterior já está confirmado.
+        acc_rs = sum(serie.get((ano_t1 - 1, bb), 0.0) for bb in range(1, 7)) * 1_000_000
     else:
-        # Bimestres 1 … (bim_t1 − 1) do ano corrente
-        acc_rs = sum(serie.get((ano_t1, b), 0.0) for b in range(1, bim_t1)) * 1_000_000
+        acc_rs = sum(serie.get((ano_t1, bb), 0.0) for bb in range(1, bim_t1)) * 1_000_000
 
+    ano_fim, bim_fim = bimestres_proj[-1]
     return {
         "taxa_por_segundo_rs":    round(taxa, 4),
         "acc_base_rs":            round(acc_rs, 2),
         "start_ms":               _start_ms_bim(ano_t1, bim_t1),
         "bim_referencia":         f"{ano_t1}-B{bim_t1}",
-        "bim_referencia_fim":     f"{ano_t2}-B{bim_t2}",
+        "bim_referencia_fim":     f"{ano_fim}-B{bim_fim}",
         "ultimo_dado":            f"{ultimo_ano}-B{ultimo_bim}",
         "ratio_rolling":          round(ratio, 6),
         "previsao_total_rs":      round(previsao_rs, 2),

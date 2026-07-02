@@ -729,118 +729,172 @@ def termometro_header(cols_grid: str = "200px 80px 1fr 80px") -> str:
 
 # ── Cálculos scatter e categorias ─────────────────────────────────────────
 
-def calcular_scatter_correntes_invest(
-    df: pd.DataFrame,
-    coluna: str = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)",
-) -> pd.DataFrame:
-    """Rolling 12 m por entidade: investimento, total e o complemento (correntes
-    e obrigatórias) — usado nas barras e tabelas das abas estadual/municipal."""
-    df_f = df[df["coluna"] == coluna].copy()
-    if df_f.empty:
-        return pd.DataFrame()
+# ── Projeção "intervalo móvel" (mesma base do contador) ────────────────────
+#
+# Toda a aba estadual/municipal (contador, composição e tabela) fala a MESMA
+# língua: gasto realizado no ano corrente + projeção dos bimestres que faltam
+# para fechar o BIMESTRE EM CURSO no calendário — nunca o ano fechado. A fórmula
+# por ente é idêntica à do contador (pipelines/contador_fiscal.py):
+#
+#     total = Σ realizado(ano, 1..último_real)  +  ratio × Σ âncora(ano-1, b)
+#             \_______________________________/     \_________________________/
+#                    já aconteceu                      b = bimestres a projetar
+#
+# O 'ratio' vem do contador (JSON) por ente — assim a soma da composição fecha
+# EXATAMENTE com a meta do contador. A coluna usada é o FLUXO do bimestre
+# ("NO BIMESTRE"): somar os fluxos jan..B_n reproduz o "até o bimestre B_n" e
+# permite projetar cada bimestre futuro na sua própria âncora sazonal.
 
-    max_ano = df_f["ano"].max()
-    cobertura = df_f[df_f["ano"] == max_ano].groupby("periodo")["cod_ibge"].nunique()
-    max_bim = int(cobertura.idxmax())
-    ano_ant = max_ano - 1
+COLUNA_FLUXO = "DESPESAS EMPENHADAS NO BIMESTRE"
 
-    def _agg(ano: int, bim: int, contas: set) -> pd.DataFrame:
-        sub = df_f[
-            (df_f["ano"] == ano) & (df_f["periodo"] == bim) &
-            (df_f["cod_conta"].isin(contas))
-        ]
-        return (
-            sub.groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"]
-            .sum().reset_index()
-        )
-
-    def _roll(contas: set, col: str) -> pd.DataFrame:
-        curr   = _agg(max_ano, max_bim, contas).rename(columns={"valor_milhoes": "curr"})
-        b6_ant = _agg(ano_ant, 6,       contas).rename(columns={"valor_milhoes": "b6"})
-        bx_ant = _agg(ano_ant, max_bim, contas).rename(columns={"valor_milhoes": "bx"})
-        m = (
-            curr
-            .merge(b6_ant[["cod_ibge", "b6"]], on="cod_ibge", how="left")
-            .merge(bx_ant[["cod_ibge", "bx"]], on="cod_ibge", how="left")
-        )
-        tem = m["b6"].notna() & m["bx"].notna()
-        m[col] = m["curr"].where(~tem, m["curr"] + m["b6"] - m["bx"])
-        return m[["cod_ibge", "uf", "ente", col]]
-
-    invest = _roll({"Investimentos", "InversoesFinanceiras"}, "invest_milhoes")
-    total  = _roll({"DespesasExcetoIntraOrcamentarias"}, "total_milhoes")
-
-    m = invest.merge(total[["cod_ibge", "total_milhoes"]], on="cod_ibge", how="inner")
-    m = m[m["total_milhoes"] > 0].copy()
-
-    # "Despesas correntes e obrigatórias" = TUDO que não é investimento produtivo,
-    # definido por COMPLEMENTO (total − investimento). Assim investimento +
-    # correntes/obrigatórias somam 100% por construção, igual ao termômetro da
-    # aba Geral (ver linha_termometro, que faz corrente_pct = 100 − invest_pct).
-    #
-    # POR QUE NÃO usamos a conta contábil "DespesasCorrentes" aqui: ela é a
-    # categoria 3 da Lei 4.320 (pessoal + juros + outras correntes) e NÃO inclui
-    # a Amortização da Dívida (categoria 4.3), que é despesa de capital mas
-    # também não é investimento. Se somássemos só "correntes estritas" +
-    # investimento, faltaria justamente a amortização (~2,3% nos estados) e a
-    # barra não fecharia 100%. O complemento reincorpora a amortização ao lado
-    # de pessoal, juros e custeio.
-    m["correntes_obrig_milhoes"] = m["total_milhoes"] - m["invest_milhoes"]
-    m["invest_ratio"] = (m["invest_milhoes"] / m["total_milhoes"] * 100).round(2)
-    m["ano"]     = max_ano
-    m["periodo"] = max_bim
-    return m.sort_values("invest_ratio", ascending=False).reset_index(drop=True)
+_CATS_ESTADUAL = [
+    ("PessoalEEncargosSociais", "Pessoal e Encargos"),
+    ("JurosEEncargosDaDivida",  "Juros da Dívida"),
+    ("OutrasDespesasCorrentes", "Outras Correntes"),
+    ("Investimentos",           "Investimentos"),
+    ("InversoesFinanceiras",    "Inversões Financeiras"),
+    ("AmortizacaoDaDivida",     "Amort. Dívida"),
+]
+_CONTAS_INVEST = {"Investimentos", "InversoesFinanceiras"}
+_CONTA_TOTAL   = "DespesasExcetoIntraOrcamentarias"
 
 
-def calcular_categorias_rolling(
+def _parse_bim(s: str) -> tuple[int, int]:
+    """'2026-B4' → (2026, 4)."""
+    ano, bim = s.split("-B")
+    return int(ano), int(bim)
+
+
+def _prox_bim(ano: int, bim: int) -> tuple[int, int]:
+    return (ano + 1, 1) if bim == 6 else (ano, bim + 1)
+
+
+def _bimestre_corrente() -> tuple[int, int]:
+    """Bimestre do calendário hoje. B1=jan/fev … B6=nov/dez."""
+    from datetime import datetime
+    d = datetime.now()
+    return d.year, (d.month + 1) // 2
+
+
+def _plano_projecao(bloco: dict | None, df_ente: pd.DataFrame):
+    """Define (ratio, último_real, [bimestres_a_projetar]) para um ente.
+
+    Prioriza o bloco do contador (JSON) — assim o dashboard replica EXATAMENTE a
+    conta do contador. Se o ente não estiver no contador, deriva do próprio dado
+    + calendário, com ratio neutro (1.0).
+    """
+    if bloco and bloco.get("ultimo_dado") and bloco.get("bim_referencia_fim"):
+        ratio = float(bloco.get("ratio_rolling", 1.0))
+        ult   = _parse_bim(bloco["ultimo_dado"])
+        fim   = _parse_bim(bloco["bim_referencia_fim"])
+        ini   = _parse_bim(bloco.get("bim_referencia", bloco["bim_referencia_fim"]))
+    else:
+        ratio = float(bloco.get("ratio_rolling", 1.0)) if bloco else 1.0
+        ult_ano = int(df_ente["ano"].max())
+        ult_bim = int(df_ente[df_ente["ano"] == ult_ano]["periodo"].max())
+        ult = (ult_ano, ult_bim)
+        fim = _bimestre_corrente()
+        ini = _prox_bim(*ult)
+
+    proj: list[tuple[int, int]] = []
+    a, b = ini
+    while (a, b) <= fim and len(proj) < 6:
+        proj.append((a, b))
+        a, b = _prox_bim(a, b)
+    return ratio, ult, proj
+
+
+def _projetar(df_fluxo: pd.DataFrame, contas: set, ratio: float,
+              ult: tuple[int, int], proj: list) -> float:
+    """Realizado (ano corrente até o último real) + projeção sazonal × ratio,
+    para o conjunto de contas informado. Valores em R$ milhões."""
+    sub = df_fluxo[df_fluxo["cod_conta"].isin(contas)]
+    ult_ano, ult_bim = ult
+    realizado = sub[
+        (sub["ano"] == ult_ano) & (sub["periodo"] <= ult_bim)
+    ]["valor_milhoes"].sum()
+    projetado = 0.0
+    for (ap, bp) in proj:
+        projetado += sub[
+            (sub["ano"] == ap - 1) & (sub["periodo"] == bp)
+        ]["valor_milhoes"].sum()
+    return float(realizado + projetado * ratio)
+
+
+def calcular_categorias_projetadas(
     df: pd.DataFrame,
     cod_ibge_list: list | None,
-    coluna: str,
-    ratio_rolling: float = 1.0,
+    bloco: dict | None,
 ) -> pd.DataFrame:
-    """
-    Acumulado por categoria no último bimestre × ratio_rolling para projeção anual.
-    cod_ibge_list=None → consolida todos os entes.
-    """
-    _CATS = [
-        ("PessoalEEncargosSociais", "Pessoal e Encargos"),
-        ("JurosEEncargosDaDivida",  "Juros da Dívida"),
-        ("OutrasDespesasCorrentes", "Outras Correntes"),
-        ("Investimentos",           "Investimentos"),
-        ("InversoesFinanceiras",    "Inversões Financeiras"),
-        ("AmortizacaoDaDivida",     "Amort. Dívida"),
-    ]
-    contas_set = {c for c, _ in _CATS}
-
-    df_f = df[df["coluna"] == coluna].copy()
+    """Composição por categoria, projetada até o bimestre corrente (mesma base do
+    contador). cod_ibge_list=None consolida todos os entes. As 6 categorias-folha
+    somam exatamente a meta do contador daquele ente/consolidado."""
+    df_f = df[df["coluna"] == COLUNA_FLUXO].copy()
     if cod_ibge_list is not None:
         df_f = df_f[df_f["cod_ibge"].isin(cod_ibge_list)]
     if df_f.empty:
         return pd.DataFrame()
 
-    max_ano = df_f["ano"].max()
-    max_bim = int(
-        df_f[df_f["ano"] == max_ano]
-        .groupby("periodo")["cod_ibge"].nunique()
-        .idxmax()
-    )
-    df_bim = df_f[
-        (df_f["ano"] == max_ano) &
-        (df_f["periodo"] == max_bim) &
-        (df_f["cod_conta"].isin(contas_set))
+    ratio, ult, proj = _plano_projecao(bloco, df_f)
+
+    linhas = [
+        {
+            "cod_conta": cod_conta,
+            "nome": nome,
+            "valor_projetado": _projetar(df_f, {cod_conta}, ratio, ult, proj),
+        }
+        for cod_conta, nome in _CATS_ESTADUAL
     ]
-    if df_bim.empty:
+    ano_ref, bim_ref = proj[-1] if proj else ult
+    out = pd.DataFrame(linhas)
+    out["ano"]     = ano_ref
+    out["periodo"] = bim_ref
+    return out.sort_values("valor_projetado", ascending=True).reset_index(drop=True)
+
+
+def calcular_scatter_correntes_invest(
+    df: pd.DataFrame,
+    blocos_por_cod: dict | None = None,
+) -> pd.DataFrame:
+    """Projeção por ente (investimento, total e o complemento correntes/
+    obrigatórias), até o bimestre corrente. `blocos_por_cod` mapeia
+    {cod_ibge: bloco_do_contador} para pegar o ratio de cada ente. Usado na
+    tabela comparativa, na barra invest×correntes e no mapa.
+
+    "Despesas correntes e obrigatórias" = total − investimento (COMPLEMENTO), para
+    que investimento + correntes/obrigatórias sempre somem 100% (mesma lógica do
+    termômetro da aba Geral). O complemento reincorpora a Amortização da Dívida
+    (4.3), que não é investimento nem despesa corrente contábil.
+    """
+    blocos_por_cod = blocos_por_cod or {}
+    df_f = df[df["coluna"] == COLUNA_FLUXO].copy()
+    if df_f.empty:
         return pd.DataFrame()
 
-    df_agg = df_bim.groupby("cod_conta")["valor_milhoes"].sum().reset_index()
-    df_agg["valor_projetado"] = df_agg["valor_milhoes"] * ratio_rolling
-    nome_map = dict(_CATS)
-    df_agg["nome"] = df_agg["cod_conta"].map(nome_map)
-    df_agg["ano"]     = max_ano
-    df_agg["periodo"] = max_bim
+    entes = df_f[["cod_ibge", "uf", "ente"]].drop_duplicates()
+    linhas = []
+    for _, e in entes.iterrows():
+        cod = int(e["cod_ibge"])
+        df_ente = df_f[df_f["cod_ibge"] == cod]
+        ratio, ult, proj = _plano_projecao(blocos_por_cod.get(cod), df_ente)
+        inv = _projetar(df_ente, _CONTAS_INVEST, ratio, ult, proj)
+        tot = _projetar(df_ente, {_CONTA_TOTAL}, ratio, ult, proj)
+        if tot <= 0:
+            continue
+        ano_ref, bim_ref = proj[-1] if proj else ult
+        linhas.append({
+            "cod_ibge": cod, "uf": e["uf"], "ente": e["ente"],
+            "invest_milhoes": inv,
+            "total_milhoes": tot,
+            "correntes_obrig_milhoes": tot - inv,
+            "invest_ratio": round(inv / tot * 100, 2),
+            "ano": ano_ref, "periodo": bim_ref,
+        })
+    if not linhas:
+        return pd.DataFrame()
     return (
-        df_agg[df_agg["nome"].notna()]
-        .sort_values("valor_projetado", ascending=True)
+        pd.DataFrame(linhas)
+        .sort_values("invest_ratio", ascending=False)
         .reset_index(drop=True)
     )
 

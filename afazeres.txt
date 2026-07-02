@@ -564,3 +564,75 @@ LEGENDAS E NOMENCLATURA (clareza p/ TI e Marketing)
         e agendamento sugerido p/ a TI. Tempo = nº requisições × 1,1s (rate limit).
 
 ================================================================================
+
+=== Iniciando sessão de 02/07/2026 ===
+
+--------------------------------------------------------------------------------
+CONSISTÊNCIA DA ABA ESTADUAL/MUNICIPAL — UNIFICAÇÃO DA METODOLOGIA
+--------------------------------------------------------------------------------
+
+Contexto: ao passar do protótipo Streamlit p/ o HTML da TI, os números da aba
+estadual divergiram. Investigando, achamos INCONSISTÊNCIAS no próprio Streamlit:
+contador, composição e tabela mostravam valores totalmente diferentes p/ o mesmo
+ente (ex. SP: 225 / 110 / 381 bi; e o pivot do parquet dava ainda 510 bi).
+
+[FEITO] Diagnóstico: cada elemento usava um método diferente sobre o parquet.
+        - Contador: empenhado NO BIMESTRE + projeção rolling-6 (correto).
+        - Composição: pegava B1 (bug do idxmax com empate 27×27) × ratio — dois
+          erros: bimestre errado e "acumulado-parcial × ratio" não é projeção.
+        - Tabela: rolling-12m (janela de ~1 ano p/ trás) — outra coisa.
+        - Os 510 bi que o Gustavo viu no parquet = soma hierárquica com dupla/
+          tripla contagem (total aparece como DespExcetoIntra + Correntes+Capital
+          + folhas). Total real empenhado ATÉ B2 de SP = R$ 170,1 bi.
+
+[FEITO] Decisão metodológica (ver CLAUDE.md): âncora única = projeção "intervalo
+        móvel até o bimestre corrente" (nunca ano fechado). Contador, composição
+        e tabela passam a usar a MESMA fórmula:
+            total = Σ realizado(ano, 1..último real) + ratio × Σ âncora(ano-1, b)
+        p/ b = bimestres do próximo real até o bimestre em curso no calendário.
+        - Escolha do Gustavo sobre ano-cheio: menor horizonte = menor erro; e não
+          divulgar número anual fechado facilita a defesa contra contestação.
+        - Ressalva registrada: o invest% vira ratio YTD e sobe ao longo do ano
+          (SP ~7,3% no 1º sem. → ~8,7% em dez), pois o acumulado só incorpora a
+          arrancada de investimento de nov/dez quando o alvo chega a B6. Rótulos
+          ajustados p/ deixar claro que é "no ano até o bimestre X".
+
+[FEITO] contador_fiscal.py: alvo da projeção agora é o BIMESTRE CORRENTE do
+        calendário (_bimestre_corrente), não "+2 fixo". Hoje (últ. real B2, em
+        B4) projeta B3+B4 — idêntico ao anterior; muda só quando B3 sair (passa
+        a projetar só B4) e ao virar o calendário p/ B5. JSON regenerado: mesmos
+        números de hoje (Estados acc R$611 bi, T+1=B3).
+
+[FEITO] theme.py: nova base compartilhada (_plano_projecao, _projetar). Reescritas
+        calcular_categorias_projetadas (antiga calcular_categorias_rolling) e
+        calcular_scatter_correntes_invest — ambas lendo o ratio por ente do JSON,
+        base FLUXO ("NO BIMESTRE"). Composição, tabela, barra e mapa das abas
+        estadual/municipal agora bebem da mesma fonte. Mapa deixou de usar
+        calcular_ratio_investimento_* (corrige o bug do B1).
+
+[FEITO] estadual.py / municipal.py: barra invest×correntes derivada do mesmo
+        cats_df da composição (os 3 elementos batem por construção); rótulos
+        trocados de "rolling 12 meses"/"projeção anual" p/ "projeção até o
+        bimestre corrente"; removida a constante órfã COLUNA_PADRAO.
+
+[FEITO] Novo teste testes/testes_consistencia_estadual.py (13 casos): trava a
+        invariante soma(composição)==meta(contador)==total(tabela) p/ SP, RJ, MG,
+        BA, CE e consolidado. 89 testes antigos + 13 novos = 102 passando.
+
+[FEITO] Verificação: SP e consolidado agora batem 278,7 / 278,7 / 278,7 bi e
+        1.079,7 / 1.079,7 / 1.080,0 bi (0,03% na tabela consolidada = ratio
+        agregado vs. soma dos ratios por estado; travado no teste).
+
+[PENDENTE] app.py (aba Geral): termômetro ainda usa rolling-12m
+        (calcular_ratio_investimento_*). Fica ~igual ao YTD-B6, mas no 1º
+        semestre mostra invest% ~0,7 p.p. acima do que a aba Estadual mostra
+        (YTD-B4). Decidir se alinha a Geral à mesma base YTD numa próxima sessão.
+
+[PENDENTE] notas_metodologicas.docx: atualizar os Elementos 2/4/5 (estadual e
+        municipal) p/ a nova base "projeção até o bimestre corrente" e a natureza
+        YTD do invest%. (Fonte do FAQ do site — Marketing.)
+
+[PENDENTE] Retomar a comparação Streamlit × HTML da TI agora que o protótipo está
+        padronizado (era o objetivo original do Gustavo).
+
+================================================================================

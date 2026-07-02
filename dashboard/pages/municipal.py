@@ -16,9 +16,8 @@ from components.theme import (
     C, inject_css, render_navbar, render_footer,
     fmt_bi, fmt_br, plotly_dark,
     carregar_dados, carregar_geojson_municipios,
-    calcular_ratio_investimento_municipios,
     calcular_scatter_correntes_invest,
-    calcular_categorias_rolling,
+    calcular_categorias_projetadas,
 )
 
 st.set_page_config(
@@ -33,8 +32,6 @@ render_navbar("municipal")
 dados  = carregar_dados()
 df_mun = dados.get("municipios", pd.DataFrame())
 cont   = dados.get("contador", {})
-
-COLUNA_PADRAO = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
 
 CATS_COMP = [
     ("PessoalEEncargosSociais",  "Pessoal e Encargos",    C["corrente"]),
@@ -182,36 +179,21 @@ def _render_mapa_interativo(ratio_reais: pd.DataFrame):
     st.plotly_chart(fig_map, width="stretch", key="mun_mapa")
 
 
-def _render_invest_correntes(scatter_df: pd.DataFrame, cod_ibge_sel: int | None, label: str):
-    """Barra invest vs correntes e obrigatórias para o município/consolidado."""
-    if scatter_df.empty:
+def _render_invest_correntes(inv_mi: float, cor_mi: float, tot_mi: float, nome: str):
+    """Barra invest vs correntes e obrigatórias (mesma base/projeção da composição)."""
+    if tot_mi <= 0:
         st.info("Sem dados suficientes.")
         return
 
-    if cod_ibge_sel is None:
-        inv_mi = float(scatter_df["invest_milhoes"].sum())
-        cor_mi = float(scatter_df["correntes_obrig_milhoes"].sum())
-        tot_mi = float(scatter_df["total_milhoes"].sum())
-        nome   = "Todas as Capitais (consolidado)"
-    else:
-        row = scatter_df[scatter_df["cod_ibge"] == cod_ibge_sel]
-        if row.empty:
-            st.info("Sem dados para o município selecionado.")
-            return
-        inv_mi = float(row["invest_milhoes"].iloc[0])
-        cor_mi = float(row["correntes_obrig_milhoes"].iloc[0])
-        tot_mi = float(row["total_milhoes"].iloc[0])
-        nome   = str(row["ente"].iloc[0])
-
-    inv_pct = round(inv_mi / tot_mi * 100, 1) if tot_mi > 0 else 0
-    cor_pct = round(cor_mi / tot_mi * 100, 1) if tot_mi > 0 else 0
+    inv_pct = round(inv_mi / tot_mi * 100, 1)
+    cor_pct = round(cor_mi / tot_mi * 100, 1)
 
     st.html(f"""
 <div style="background:{C['bg2']};border:1px solid {C['border']};border-radius:12px;
             padding:24px 28px;margin-bottom:12px;">
   <div style="font-size:11px;color:{C['text_muted']};margin-bottom:14px;
               text-transform:uppercase;letter-spacing:1.5px;font-weight:600;">
-    {nome} · rolling 12 meses
+    {nome} · projeção até o bimestre corrente
   </div>
   <div style="display:grid;grid-template-columns:80px 1fr 80px;
               align-items:center;gap:16px;">
@@ -266,16 +248,16 @@ def _render_tabela_comparativa(scatter_df: pd.DataFrame, uf_sel: str):
     st.dataframe(df_tab, hide_index=True, width="stretch", height=380)
 
 
-def _render_categorias(df: pd.DataFrame, cod_ibge_list, ratio_rolling: float, titulo: str):
-    cats_df = calcular_categorias_rolling(df, cod_ibge_list, COLUNA_PADRAO, ratio_rolling)
+def _render_categorias(cats_df: pd.DataFrame, titulo: str):
     if cats_df.empty:
         st.info("Sem dados de categorias.")
         return
 
     ano = int(cats_df["ano"].iloc[0])
     bim = int(cats_df["periodo"].iloc[0])
-    _section_title(f"Composição projetada — {titulo} · {ano} (acumulado B{bim} × fator sazonal)")
+    _section_title(f"Composição projetada até B{bim}/{ano} — {titulo}")
 
+    cats_df = cats_df.copy()
     cats_df["cor"] = cats_df["cod_conta"].map(COR_MAP).fillna(C["primary"])
 
     fig = go.Figure(go.Bar(
@@ -291,7 +273,7 @@ def _render_categorias(df: pd.DataFrame, cod_ibge_list, ratio_rolling: float, ti
     ))
     x_max = float((cats_df["valor_projetado"] / 1e3).max())
     fig.update_layout(
-        xaxis_title="R$ bilhões (projeção anual)",
+        xaxis_title="R$ bilhões (projeção até o bimestre corrente)",
         xaxis=dict(range=[0, x_max * 1.7]),
         showlegend=False,
     )
@@ -306,8 +288,10 @@ if df_mun.empty:
     render_footer("SICONFI · Tesouro Nacional · Capitais estaduais · RREO bimestral")
     st.stop()
 
-ratio_reais = calcular_ratio_investimento_municipios(df_mun)
-scatter_df  = calcular_scatter_correntes_invest(df_mun)
+cont_mun = cont.get("municipios", {})
+# {cod_ibge: bloco do contador} — o contador de municípios já é chaveado por cod_ibge.
+blocos_por_cod = {int(k): v for k, v in cont_mun.items() if k != "_consolidado"}
+scatter_df = calcular_scatter_correntes_invest(df_mun, blocos_por_cod)
 
 # ── Elemento 1: Seletores ─────────────────────────────────────────────────────
 ufs_disp = sorted(df_mun["uf"].unique().tolist())
@@ -327,7 +311,6 @@ with col_s2:
         mun_cod  = int(mun_opts[mun_sel])
 
 # ── Contexto da seleção ───────────────────────────────────────────────────────
-cont_mun = cont.get("municipios", {})
 if mun_cod is None:
     cont_data     = cont_mun.get("_consolidado", {})
     cod_ibge_list = None
@@ -341,14 +324,18 @@ else:
         else str(mun_cod)
     )
 
-ratio_rolling = cont_data.get("ratio_rolling", 1.0)
+# Composição projetada + barra derivada do mesmo cats_df (três elementos batem).
+cats_df = calcular_categorias_projetadas(df_mun, cod_ibge_list, cont_data)
+inv_mi  = float(cats_df[cats_df["cod_conta"].isin(["Investimentos", "InversoesFinanceiras"])]["valor_projetado"].sum()) if not cats_df.empty else 0.0
+tot_mi  = float(cats_df["valor_projetado"].sum()) if not cats_df.empty else 0.0
+cor_mi  = tot_mi - inv_mi
 
 # ── Elemento 2: Contador animado ─────────────────────────────────────────────
 _render_contador_animado(cont_data, label_cnt)
 
 # ── Elemento 3: Mapa interativo ───────────────────────────────────────────────
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
-_render_mapa_interativo(ratio_reais)
+_render_mapa_interativo(scatter_df)
 
 # ── Elementos 4 + 5 lado a lado ──────────────────────────────────────────────
 st.markdown("<div class='section-divider'></div>", unsafe_allow_html=True)
@@ -356,10 +343,10 @@ col4, col5 = st.columns(2)
 
 with col4:
     _section_title("Investimento vs Despesas Correntes e Obrigatórias")
-    _render_invest_correntes(scatter_df, mun_cod, label_cnt)
+    _render_invest_correntes(inv_mi, cor_mi, tot_mi, label_cnt)
     _render_tabela_comparativa(scatter_df, uf_sel)
 
 with col5:
-    _render_categorias(df_mun, cod_ibge_list, ratio_rolling, label_cnt)
+    _render_categorias(cats_df, label_cnt)
 
 render_footer("SICONFI · Tesouro Nacional · Capitais estaduais · RREO bimestral")

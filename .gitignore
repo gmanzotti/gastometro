@@ -11,6 +11,9 @@ data/emendas/
 .vscode/
 .claude/
 
+# Rascunhos pessoais do Gustavo (screenshots, scripts de apoio) — não versionar
+rascunhos/
+
 # Python
 __pycache__/
 *.py[cod]

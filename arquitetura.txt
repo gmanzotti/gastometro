@@ -199,10 +199,20 @@ Barra "Investimento vs Despesas Correntes e Obrigatórias" (decisão 2026-06-15)
   não é investimento nem corrente — isso fazia a barra subnacional não fechar
   (~2,3% nos estados). Rótulo unificado; detalhe no notas_metodologicas.docx.
 
-Contador: projeção por ratio rolling 12 meses sobre o mesmo período do ano
-  anterior; bimestres não entregues ao SICONFI imputados por sazonalidade
-  histórica (ratio B_n/B_{n-1}, 3 anos). DF tem esfera='D' no SICONFI e é
-  incluído manualmente entre os estados.
+Contador: projeção por ratio (subnacional: rolling 6 bimestres; federal: rolling
+  12 meses) aplicado à âncora sazonal (mesmo período do ano anterior). Bimestres
+  não entregues ao SICONFI imputados por sazonalidade histórica (ratio
+  B_n/B_{n-1}, 3 anos). DF tem esfera='D' no SICONFI e é incluído manualmente
+  entre os estados.
+
+Base unificada da aba estadual/municipal (decisão 2026-07-02): contador,
+  composição, tabela, barra e mapa usam a MESMA projeção "intervalo móvel até o
+  bimestre corrente" (nunca ano fechado) — realizado no ano + projeção dos
+  bimestres que faltam para fechar o bimestre em curso no calendário. Os três
+  elementos batem por construção (invariante em testes_consistencia_estadual.py).
+  Consequência aceita: o invest% dessas abas é um ratio YTD que sobe ao longo do
+  ano (sazonalidade do investimento) — rotulado "no ano até o bimestre X". O
+  termômetro da aba Geral segue em rolling 12 meses (a unificar).
 
 Deflacionamento: somas de 12 meses sempre em R$ constantes (IPCA).
 

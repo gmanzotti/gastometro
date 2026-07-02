@@ -81,9 +81,9 @@ testes/                          pytest (89 testes) — rodar após mudanças co
 - **Fase da despesa subnacional: EMPENHADA** ("DESPESAS EMPENHADAS ATÉ O
   BIMESTRE (f)" / "...NO BIMESTRE") — decisão de 12/06/2026, racional de
   advocacy: fase mais abrangente do ciclo (empenhado ≥ liquidado ≥ pago).
-  Os parquets guardam as 5 colunas de fase; trocar de fase é só mudar as
-  constantes (`COLUNA_PADRAO` nas pages, `COLUNA_FLUXO` no contador, e os
-  filtros hardcoded em theme.py) e regenerar o contador.
+  Os parquets guardam as 5 colunas de fase; trocar de fase é só mudar a
+  constante `COLUNA_FLUXO` (definida no contador e em theme.py) e regenerar o
+  contador.
   - Federal (RTN) é regime de **caixa** (metodologia própria da STN) — o
     contador consolidado mistura caixa (federal) + empenhado (subnacional);
     o label da aba Geral é neutro por isso.
@@ -100,7 +100,26 @@ testes/                          pytest (89 testes) — rodar após mudanças co
   `calcular_scatter_correntes_invest` (coluna `correntes_obrig_milhoes`); aba Geral
   já usava complemento (`linha_termometro`). Rótulo unificado: "Despesas correntes
   e obrigatórias". Federal mantém só "correntes" (nota própria nas notas metodológicas).
-- **Rolling 12 meses** para ratios de investimento (neutraliza sazonalidade).
+- **Aba estadual/municipal: projeção "intervalo móvel até o bimestre corrente"**
+  (decisão 02/07/2026). Contador, composição, tabela, barra e mapa dessas abas
+  usam UMA única base e sempre batem entre si (invariante travada em
+  `testes/testes_consistencia_estadual.py`):
+    `total = Σ realizado(ano, 1..último real) + ratio × Σ âncora(ano-1, b)`
+  onde `b` vai do bimestre seguinte ao último real até o **bimestre em curso no
+  calendário** (`_bimestre_corrente`), nunca o ano fechado. Racional: menor
+  horizonte = menor erro, e não divulgar número anual reduz a contestação.
+  - Base compartilhada em theme.py: `_plano_projecao` / `_projetar`, consumidas
+    por `calcular_categorias_projetadas` e `calcular_scatter_correntes_invest`.
+    O `ratio` por ente vem do JSON do contador → soma da composição == meta do
+    contador por construção.
+  - **Ressalva viva:** o invest% dessas abas é um ratio **YTD** e SOBE ao longo
+    do ano (SP ~7,3% no 1º sem. → ~8,7% em dez), pois o acumulado só incorpora a
+    arrancada de investimento de nov/dez quando o alvo chega a B6. Rotular sempre
+    como "no ano até o bimestre X", nunca "estrutural/anual".
+- **Rolling 12 meses** só no **termômetro da aba Geral** e no ratio federal
+  (neutraliza sazonalidade). NÃO alinhado à base YTD acima — no 1º semestre a
+  Geral mostra invest% ~0,7 p.p. acima da aba Estadual. Pendência: decidir se
+  unifica (ver afazeres.txt).
 - **Toda soma de 12m em R$ deve usar `constante_milhoes`** (IPCA) — somas
   nominais subestimam vs tabelas da STN (~2,5%).
 - Imputação sazonal de bimestres não entregues no SICONFI (ratio histórico
@@ -122,6 +141,11 @@ testes/                          pytest (89 testes) — rodar após mudanças co
 arquivos acima antes de encerrar qualquer sessão de trabalho**, mesmo sem
 pedido explícito. No mínimo: registrar a sessão no afazeres.txt e verificar se
 as mudanças do dia tornaram algum dos outros arquivos desatualizado.
+
+**Ao final, commitar e dar push para os dois repositórios** (decisão 02/07/2026):
+o remote `origin` tem push duplo (Azure DevOps + GitHub), então um único
+`git push origin master` envia para ambos. Nunca versionar `rascunhos/` (drafts
+pessoais do Gustavo — já no .gitignore).
 
 ## Dinâmica com TI e produção
 
