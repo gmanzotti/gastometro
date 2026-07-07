@@ -55,6 +55,11 @@ pipelines/municipios/            SICONFI → data/municipios/gastos_municipios.p
   load_producao.py               versão p/ TI: 5.570 municípios, ~24-36h, retomável
 pipelines/contador_fiscal.py     consolida as 3 bases → data/contador_fiscal.json
                                  (acc + taxa R$/s por esfera e por ente; imputação sazonal)
+pipelines/exportar_web.py        CAMADA WEB: gera data/web/*.json (~40 arquivos) que o
+                                 site da TI consome do ADLS — schema igual ao do frontend
+                                 existente; TODA a matemática importada de theme.py (zero
+                                 duplicação de fórmulas). TI executa após cargas+contador
+                                 e publica data/web/ no ADLS (instruções no docstring)
 pipelines/simplificar_geojson.py reduz vértices das malhas (Douglas-Peucker via
                                  shapely) → data/*_geojson_simplificado.json
                                  (municípios 56MB→3,6MB; rodar quando o IBGE
@@ -65,10 +70,11 @@ dashboard/pages/federal.py       6 elementos fixos
 dashboard/pages/estadual.py      5 elementos fixos
 dashboard/pages/municipal.py     5 elementos fixos
 dashboard/components/theme.py    CSS, navbar (_NAV_PAGES), funções de cálculo compartilhadas
-testes/                          pytest (89 testes) — rodar após mudanças com os caminhos
+testes/                          pytest (104 testes) — rodar após mudanças com os caminhos
                                  explícitos (testes_*.py não é descoberto pelo padrão test_*):
                                  pytest testes/testes_federal.py testes/testes_load_estados.py
                                         testes/testes_load_municipios.py
+                                        testes/testes_consistencia_estadual.py
 ```
 
 - Ambiente: conda env `acompanhamento_fiscal` (Anaconda, Windows). Drive `V:` é
@@ -116,10 +122,27 @@ testes/                          pytest (89 testes) — rodar após mudanças co
     do ano (SP ~7,3% no 1º sem. → ~8,7% em dez), pois o acumulado só incorpora a
     arrancada de investimento de nov/dez quando o alvo chega a B6. Rotular sempre
     como "no ano até o bimestre X", nunca "estrutural/anual".
-- **Rolling 12 meses** só no **termômetro da aba Geral** e no ratio federal
-  (neutraliza sazonalidade). NÃO alinhado à base YTD acima — no 1º semestre a
-  Geral mostra invest% ~0,7 p.p. acima da aba Estadual. Pendência: decidir se
-  unifica (ver afazeres.txt).
+- **Termômetros na base YTD** (decisão 07/07/2026 — eliminou o último
+  desalinhamento interno): os termômetros da Geral e da Federal usam a MESMA
+  base "no ano, projetado até o período corrente" das abas Estadual/Municipal.
+  `ratio_ytd_subnacional` deriva da própria `calcular_categorias_projetadas`
+  (igualdade entre abas por construção); `ratio_federal` é o espelho MENSAL da
+  fórmula bimestral, com plano do bloco federal do contador (replica a meta
+  acc+previsão). Invariantes em testes_consistencia_estadual.py. Rolling 12m
+  sobrevive apenas nas séries históricas da aba Federal (Elementos 2 e 6).
+- **Camada web gerada por nós** (decisão 07/07/2026): o site da TI consome
+  JSONs do ADLS; eram gerados por script da TI que reimplementava nossa
+  matemática (causa raiz das divergências Streamlit × site — o script deles
+  espelhava o protótipo de 30/06, pré-unificação). Agora
+  `pipelines/exportar_web.py` gera tudo com as funções de theme.py; a TI só
+  executa e publica. Guardas: exclui consórcios públicos (reportam sob o
+  cod_ibge do município-sede!) e entes com invest% fora de [0,100].
+- **Municípios <50 mil hab. podem publicar o RREO SEMESTRALMENTE** (LRF art.
+  63) — por isso a extração bimestral completa retorna ~3.500 municípios, não
+  5.570 (adesão varia por UF: MG 19%, BA 100%). TODOS os 686 municípios de
+  50 mil+ hab. publicam bimestral; cobertura populacional 92,7%. Decisão
+  07/07: manter cobertura bimestral com nota no site; avaliar consulta
+  semestral complementar depois. NÃO é falha de extração.
 - **Toda soma de 12m em R$ deve usar `constante_milhoes`** (IPCA) — somas
   nominais subestimam vs tabelas da STN (~2,5%).
 - Imputação sazonal de bimestres não entregues no SICONFI (ratio histórico
@@ -152,12 +175,25 @@ pessoais do Gustavo — já no .gitignore).
 - TI prefere ecossistema Microsoft (Azure DevOps, ADLS). Acatar quando não
   comprometer funcionalidade nem agilidade; chefe e Skaf favorecem a
   independência dos departamentos.
-- Pendências com a TI: rodar `load_producao.py` (estados ~10 min; municípios
-  24-36h), infra ADLS Gen2 (storage account/container/auth) e certificado SSL.
+- A TI já rodou a carga completa (estados 2016+ — pedir re-extração 2024+;
+  municípios ~3.500 entes OK) e tem um protótipo HTML no ar
+  (apps.fiesp.com.br/gastometro) que consome JSONs do ADLS. O frontend
+  DEFINITIVO ainda será feito pelo Marketing — não gastar energia em ajustes
+  cosméticos do HTML da TI.
+- **SEGURANÇA (urgente, comunicado em 07/07)**: o config.js público do site da
+  TI expõe SAS do ADLS com ESCRITA/DELEÇÃO válido até 2036. Pedir token
+  somente-leitura curto + rotação do atual.
+- Divergências de números com o site: causa raiz era a camada web da TI
+  (metodologia antiga reimplementada) — resolvido com pipelines/exportar_web.py
+  (ver diagnóstico completo em rascunhos/diagnostico_streamlit_vs_html_TI_20260707.md).
 
 ## Pendências conhecidas (ver afazeres.txt para a lista viva)
 
-- Enviar `load_producao.py` à TI (instruções nos docstrings).
+- Reunião com a TI: SAS, adoção do exportar_web.py, consórcios/degenerados na
+  extração municipal, municípios semestrais, cronograma de re-deploy.
+- Atualizar notas_metodologicas.docx (base unificada 02/07 + termômetro YTD
+  07/07) — após a reunião com a TI.
+- Atualizar RTN local p/ maio/2026 e regenerar contador + data/web.
 - WhatsApp Business API: iniciar aprovação (maior lead time do projeto).
 - Validar formato do dashboard com o chefe.
-- Avaliar R$ constantes no Elemento 6 federal e no ratio do Termômetro.
+- Avaliar R$ constantes no Elemento 6 federal.

@@ -636,3 +636,114 @@ ente (ex. SP: 225 / 110 / 381 bi; e o pivot do parquet dava ainda 510 bi).
         padronizado (era o objetivo original do Gustavo).
 
 ================================================================================
+
+=== Iniciando sessão de 07/07/2026 ===
+
+--------------------------------------------------------------------------------
+DIAGNÓSTICO COMPLETO: STREAMLIT × HTML DA TI (auditoria dos dados + frontend)
+--------------------------------------------------------------------------------
+
+Contexto: a TI enviou os parquets/JSON dela (pasta base_dados_TI/, fora do git).
+Auditamos dados, frontend (gastometro.js/config.js) e os 13 JSONs da "camada
+web" no ADLS. Documento p/ e-mail/reunião:
+rascunhos/diagnostico_streamlit_vs_html_TI_20260707.md
+
+[FEITO] Auditoria dos dados da TI — extração APROVADA:
+        - Estados: parquet idêntico ao nosso célula a célula (16.766 valores,
+          dif zero). O "10.700 linhas / 2016+" do e-mail de 02/07 não se
+          reproduz (confirmar com a TI qual arquivo era).
+        - Municípios: 1,64 mi linhas, 3.527 entes; capitais 100% idênticas.
+        - RTN: mais nova que a nossa (tem maio/2026; nós paramos em abril).
+          Difs em constante_milhoes = rebase mensal do IPCA (esperado).
+        - Contador: bloco estadual idêntico; total R$ 2,33 tri (vs nosso 1,63)
+          é legítimo: +1 mês federal + universo municipal 3.017 vs 26 capitais.
+
+[FEITO] Cobertura municipal ~3.500/5.570 explicada — NÃO é falha da TI:
+        - Ausentes: 2.042, TODOS <50 mil hab; presentes: TODOS os 686 de 50k+.
+        - Causa: LRF art. 63 permite RREO SEMESTRAL p/ <50 mil hab (adesão
+          regional: MG 19% de cobertura, BA 100%). Cobertura pop.: 92,7%.
+        - Decisão do Gustavo: manter cobertura bimestral + nota no site (opção
+          a); avaliar consulta semestral complementar depois (opção b).
+
+[FEITO] Causa raiz das divergências identificada — camada web da TI:
+        - Script da TI (parquet → JSONs do ADLS) espelha o protótipo de 30/06,
+          ANTERIOR à unificação metodológica de 02/07. Verificado ao centavo:
+          mapa/ranking estadual = rolling 12m (SP 392,1 bi/8,66%); composição =
+          acumulado×ratio (SP 182,2 bi) — vs 278,7 bi da base unificada.
+        - Bugs visíveis no site: tabela municipal abre com invest 256% do total
+          (Paramoti-CE, janelas rolling descasadas); referências B1×B2
+          desencontradas; aba municipal sem composição por conta.
+        - ACHADO DE SEGURANÇA (urgente p/ TI): config.js público expõe SAS do
+          ADLS com ESCRITA/DELEÇÃO (sp=racwdlm) válido até 2036 — qualquer
+          visitante pode sobrescrever os dados do site. Trocar por sp=rl curto
+          e ROTACIONAR o token atual.
+        - Achado na extração municipal da TI: 68 CONSÓRCIOS públicos reportam
+          sob o cod_ibge do município-sede (gasto se mistura e ente duplica);
+          + 3 municípios com dados degenerados (Piripá-BA, Tobias Barreto-SE,
+          S. Francisco do Conde-BA). Corrigir na extração; exportador tem guarda.
+
+--------------------------------------------------------------------------------
+TERMÔMETRO DA ABA GERAL ALINHADO À BASE YTD (decisão 07/07/2026)
+--------------------------------------------------------------------------------
+
+[FEITO] Termômetros (Geral e Federal El. 3) migrados de rolling 12m p/ a base
+        YTD unificada "no ano, projetado até o período corrente":
+        - theme.py: nova ratio_ytd_subnacional() deriva o ratio da MESMA
+          calcular_categorias_projetadas das abas Estadual/Municipal (igualdade
+          por construção); ratio_federal() reescrita como espelho MENSAL da
+          fórmula bimestral (plano do bloco federal do contador; replica a meta
+          acc+previsão com dif 1e-7).
+        - Removidas as funções rolling órfãs (_rolling12_siconfi,
+          calcular_ratio_investimento_estados/_municipios) — recuperáveis no git.
+        - Valores novos: Federal 3,3% (era 4,0) | Estados 9,5% (era 10,1) |
+          Capitais 9,3% (era 7,3 — sobe pois empenhado antecipa contratos
+          anuais) | Consolidado 6,4%. Estados = exatamente a barra da aba
+          Estadual (1.079,7 bi).
+        - 2 testes novos em testes_consistencia_estadual.py: termômetro Geral
+          == composição Estadual; termômetro federal == meta do contador.
+          Suíte: 104/104 passando.
+
+--------------------------------------------------------------------------------
+NOVO PIPELINE: exportar_web.py (camada web gerada por nós, não pela TI)
+--------------------------------------------------------------------------------
+
+[FEITO] Refactor prévio: cálculos federais extraídos de pages/federal.py p/
+        theme.py (serie_12m_pct_total, composicao_obrigatorias_federal,
+        composicao_investimentos_federal, serie_resultado_primario) — federal.py
+        fica só com renderização; exportador usa as MESMAS funções.
+
+[FEITO] pipelines/exportar_web.py: gera os ~40 JSONs da camada web (schema
+        idêntico ao que o frontend da TI já consome — site não muda) importando
+        a matemática de theme.py. Zero fórmulas duplicadas.
+        - Novidades vs script da TI: municipios_composicao_gastos.json (El. 5
+          municipal que faltava), guarda de sanidade 0–100% nos ratios,
+          exclusão de consórcios, referências padronizadas, base metodológica
+          anotada em cada arquivo (schema_version 3).
+        - Validado: local reproduz o protótipo ao centavo (SP 278.726,59 mi;
+          termômetros idênticos); com o parquet municipal COMPLETO da TI gera
+          3.484 municípios sem nenhum ratio impossível.
+        - Operação TI: python pipelines/exportar_web.py após cargas+contador;
+          publicar data/web/ no ADLS. Instruções no docstring.
+
+--------------------------------------------------------------------------------
+PRÓXIMOS PASSOS
+--------------------------------------------------------------------------------
+
+[PENDENTE] Reunião com a TI (pauta na seção 5 do diagnóstico em rascunhos/):
+           SAS urgente, exportar_web.py, consórcios/degenerados na extração,
+           municípios semestrais, cronograma de re-deploy.
+
+[PENDENTE] notas_metodologicas.docx: atualizar p/ base unificada 02/07 +
+           termômetro YTD 07/07 (Elementos 2/4/5 estadual/municipal e
+           termômetros Geral/Federal). Fazer após as orientações da reunião.
+
+[PENDENTE] Atualizar RTN local p/ maio/2026 (python atualizar_dados.py) e
+           regenerar contador + data/web (a TI já está com maio).
+
+[PENDENTE] Avaliar consulta semestral complementar (municípios <50 mil hab.,
+           LRF art. 63) p/ incorporar os ~2.000 ausentes 2×/ano.
+
+[PENDENTE] Enviar load_producao.py à TI / WhatsApp Business API / validar
+           formato do dashboard com o chefe (pendências antigas).
+
+================================================================================

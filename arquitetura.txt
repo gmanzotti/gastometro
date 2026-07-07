@@ -1,7 +1,7 @@
 ================================================================================
 ARQUITETURA — GASTÔMETRO FIESP
 Documento interno compartilhado entre Assessoria Econômica, TI e Marketing
-Última revisão: 2026-06-12
+Última revisão: 2026-07-07
 ================================================================================
 
 Este documento registra as decisões de arquitetura do projeto e o contrato
@@ -65,6 +65,29 @@ Assessoria). Metodologia detalhada por elemento do site: notas_metodologicas.doc
 
 [2026-06-12] Fase da despesa subnacional: EMPENHADA (ver seção 5).
 
+[2026-07-02] Base unificada das abas estadual/municipal: projeção "intervalo
+             móvel até o bimestre corrente" (ver seção 5).
+
+[2026-07-07] CAMADA WEB GERADA PELA ASSESSORIA: os JSONs que o site consome
+             do ADLS passam a ser gerados por pipelines/exportar_web.py
+             (mesmas funções testadas do protótipo), e não mais por script
+             próprio da TI. Motivo: a duplicação da lógica de cálculo em dois
+             códigos causou as divergências de números entre o protótipo e o
+             site (o script da TI espelhava metodologia desatualizada). A TI
+             executa o pipeline e publica data/web/ no ADLS; o schema dos
+             arquivos é o MESMO que o frontend já consome.
+
+[2026-07-07] Termômetros de investimento na base YTD ("no ano, projetado até
+             o período corrente") em todas as abas — rolling 12m só nas
+             séries históricas da aba Federal.
+
+[2026-07-07] Cobertura municipal: a extração bimestral completa retorna
+             ~3.500 municípios porque municípios <50 mil hab. podem publicar
+             o RREO SEMESTRALMENTE (LRF art. 63). Todos os 686 municípios de
+             50 mil+ hab. estão cobertos (92,7% da população). Decisão:
+             manter cobertura bimestral com nota de esclarecimento no site;
+             avaliar consulta semestral complementar no futuro.
+
 
 3. PIPELINES (Camada 1 — o que a TI executa)
 ────────────────────────────────────────────────────────────────────
@@ -89,6 +112,18 @@ pipelines/municipios/load_producao.py
 
 pipelines/contador_fiscal.py        Consolida as 3 bases no contador_fiscal.json
                                     (taxa R$/segundo por esfera e por ente).
+
+pipelines/exportar_web.py           Gera a CAMADA WEB (data/web/*.json, ~40
+                                    arquivos) consumida pelo site. Rodar após
+                                    as cargas e o contador; publicar data/web/
+                                    no ADLS (.../gastometro/data/web). Schema
+                                    idêntico ao do frontend existente. Toda a
+                                    matemática vem de dashboard/components/
+                                    theme.py — não reimplementar cálculos fora
+                                    deste repositório. Guardas embutidas:
+                                    exclui consórcios públicos (reportam sob o
+                                    cod_ibge do município-sede) e entes com
+                                    invest% impossível (fora de 0–100%).
 
 Flags úteis (producao): --ano-inicio N  --intervalo S  --no-verify-ssl
 As versões load_prototipo.py são as usadas pela Assessoria localmente.
@@ -156,6 +191,19 @@ data/contador_fiscal.json — alimenta os contadores em tempo real
 
 data/estados_geojson.json (1,1 MB) e data/municipios_geojson.json (~56 MB)
   Malhas IBGE CRUAS para os mapas interativos (fonte-de-verdade).
+
+data/web/*.json — CAMADA WEB (o que o site de fato lê; ver exportar_web.py)
+  geral.json, {federal,estados,municipios}_resumo.json, estados_mapa.json,
+  estados_ranking.json, {estados,municipios}_composicao_gastos.json,
+  municipios_mapa_ufs.json, municipios_mapa_uf_{UF}.json (27),
+  municipios_ranking.json, federal_series.json,
+  federal_composicao_{obrigatorias,investimentos}.json,
+  federal_resultado_primario.json.
+  Campos por bloco de contador: acc_base_rs, taxa_por_segundo_rs, start_ms,
+  valor_atual_rs, ultimo_dado, referencia(_fim), ratio_rolling,
+  previsao_total_rs. Valores monetários em *_milhoes (R$ mi) ou *_rs (R$).
+  Cada arquivo traz schema_version, gerado_em e a base metodológica em
+  "observacao". Frontend anima: valor = acc + (agora−start_ms)/1000 × taxa.
 
 data/estados_geojson_simplificado.json (0,25 MB) e
 data/municipios_geojson_simplificado.json (3,6 MB)
@@ -236,6 +284,23 @@ template — iniciar antes da automação.
 
 7. PENDÊNCIAS DE INFRAESTRUTURA (TI)
 ────────────────────────────────────────────────────────────────────
+
+[ ] URGENTE — SEGURANÇA: o config.js público do protótipo HTML expõe um token
+    SAS do ADLS com permissões de ESCRITA/DELEÇÃO (sp=racwdlm) e validade até
+    2036. Qualquer visitante pode sobrescrever os dados do site. Substituir
+    por SAS somente-leitura (sp=rl) de validade curta com rotação — ou servir
+    os JSONs por endpoint próprio — e REVOGAR o token atual (já público).
+
+[ ] Adotar pipelines/exportar_web.py como fonte única da camada web (executar
+    após as cargas; publicar data/web/ no ADLS). Aposentar o script próprio de
+    geração de JSONs.
+
+[ ] Extração municipal: filtrar consórcios públicos (entram sob o cod_ibge do
+    município-sede) e investigar 3 municípios com dados degenerados na origem
+    (Piripá-BA, Tobias Barreto-SE, S. Francisco do Conde-BA).
+
+[ ] Re-extrair estados com --ano-inicio 2024 se algum ambiente ainda usar o
+    parquet 2016+ (o combinado é 2024+, mínimo p/ as projeções).
 
 [ ] Executar a carga histórica subnacional no servidor:
       python pipelines/estados/load_producao.py        (~10 min)
