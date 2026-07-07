@@ -32,7 +32,6 @@ Decisões metodológicas:
     discricionário), conceito distinto de "obrigatórias".
 """
 
-import re
 import sys
 import textwrap
 import time
@@ -47,8 +46,12 @@ from components.theme import (
     C, MES_LABELS, _RSEL,
     inject_css, render_navbar, render_footer,
     fmt_bi, fmt_br, plotly_dark, rangeselector_buttons,
-    carregar_dados, rtn_soma_12m,
+    carregar_dados,
     ratio_federal, linha_termometro, termometro_header,
+    serie_12m_pct_total,
+    composicao_obrigatorias_federal,
+    composicao_investimentos_federal,
+    serie_resultado_primario,
 )
 
 st.set_page_config(
@@ -83,34 +86,9 @@ def _section_title(txt: str):
     )
 
 
-def _limpar_rubrica(label: str) -> str:
-    """Remove numeração, prefixo INV e notas de rodapé ('4/') do nome da rubrica."""
-    s = re.sub(r"^INV\s+", "", label)        # prefixo das séries da aba 1.3
-    s = re.sub(r"^[\d\.]+\s+", "", s)        # numeração ("4.3.14", "2.1.1.1"...)
-    s = re.sub(r"\s+\d+/\s*$", "", s)        # nota de rodapé no fim ("4/")
-    return s.strip()
-
-
-def _soma_12m_label(label: str) -> float | None:
-    """Soma 12 meses de uma série pelo nome EXATO, em R$ CONSTANTES.
-
-    Diferente de rtn_soma_12m (que usa startswith), a igualdade exata evita
-    dupla contagem com sub-rubricas: '4.3.01 Abono e Seguro Desemprego' tem
-    filhas '4.3.01.1 Abono' e '4.3.01.2 Seguro Desemprego' que seriam
-    capturadas por um filtro de prefixo.
-
-    R$ constantes (IPCA) porque somar 12 meses em R$ correntes subestima o
-    total em moeda de hoje (~2,5% com IPCA a ~5% a.a.) — é o padrão da
-    própria STN na tabela 1.2-B da RTN ("Acumulado em 12 meses").
-    """
-    sub = df_rtn[df_rtn["discriminacao"] == label]
-    m_ini, a_ini = (mes_atual + 1, ano_atual - 1) if mes_atual < 12 else (1, ano_atual)
-    mask = (
-        ((sub["ano"] > a_ini) | ((sub["ano"] == a_ini) & (sub["mes"] >= m_ini))) &
-        ((sub["ano"] < ano_atual) | ((sub["ano"] == ano_atual) & (sub["mes"] <= mes_atual)))
-    )
-    vals = sub[mask]["constante_milhoes"].dropna()
-    return float(vals.sum()) if len(vals) >= 6 else None
+# Os cálculos das composições e séries (Elementos 2, 4, 5 e 6) vivem em
+# components/theme.py desde 07/07/2026 — compartilhados com o pipeline
+# pipelines/exportar_web.py (camada web do site da TI). Aqui fica só a renderização.
 
 
 # ── Elemento 1: Contador federal animado ──────────────────────────────────
@@ -187,35 +165,6 @@ SERIES_EL2 = [
 ]
 
 
-def _serie_12m_pct_total(prefixos: tuple) -> pd.DataFrame:
-    """Acumulado 12 meses da série como % da Despesa Total (também em 12m).
-
-    Em % da despesa, deflator e crescimento real se cancelam — a leitura vira
-    pura composição do orçamento, sem ruído de inflação.
-    """
-    def _soma_12m(prefs: tuple) -> pd.DataFrame:
-        sub = df_rtn[df_rtn["discriminacao"].str.startswith(prefs)]
-        # R$ constantes: numerador e denominador na mesma moeda do mesmo mês
-        # (ratio de somas nominais daria peso menor aos meses mais antigos)
-        mensal = (
-            sub.groupby(["ano", "mes"], as_index=False)["constante_milhoes"].sum()
-            .sort_values(["ano", "mes"])
-        )
-        # rolling(12): soma janela móvel de 12 meses — neutraliza a sazonalidade
-        # (dezembro concentra pagamentos de precatórios, 13º, restos a executar)
-        mensal["v12"] = mensal["constante_milhoes"].rolling(12).sum()
-        return mensal[["ano", "mes", "v12"]]
-
-    serie = _soma_12m(prefixos)
-    total = _soma_12m(("4. ",)).rename(columns={"v12": "v12_total"})
-    m = serie.merge(total, on=["ano", "mes"])
-    m["pct"]  = m["v12"] / m["v12_total"] * 100
-    m["data"] = pd.to_datetime(
-        m["ano"].astype(str) + "-" + m["mes"].astype(str).str.zfill(2) + "-01"
-    )
-    return m.dropna(subset=["pct"])
-
-
 def _render_linhas_composicao():
     _section_title(
         "Despesas Obrigatórias vs Discricionárias "
@@ -225,7 +174,7 @@ def _render_linhas_composicao():
 
     fig = go.Figure()
     for prefixos, nome, cor, estilo in SERIES_EL2:
-        s = _serie_12m_pct_total(prefixos)
+        s = serie_12m_pct_total(df_rtn, prefixos)
         s = s[s["data"] >= "2010-01-01"]
         fig.add_trace(go.Scatter(
             x=s["data"], y=s["pct"],
@@ -272,11 +221,15 @@ def _render_linhas_composicao():
 # ── Elemento 3: Termômetro federal (idêntico ao da aba Geral) ─────────────
 
 def _render_termometro_federal():
-    r_fed = ratio_federal(df_rtn)
-    nota  = (
-        f"Fonte: RTN/STN · rolling 12 meses até "
-        f"{MES_LABELS.get(mes_atual, mes_atual)}/{ano_atual}"
-    )
+    # Mesma base YTD da aba Geral (decisão 07/07/2026): plano de projeção do
+    # bloco federal do contador — os dois termômetros batem por construção.
+    r_fed = ratio_federal(df_rtn, contador.get("federal", {}))
+    if r_fed is not None:
+        _ano_f, _mes_f = r_fed[3]
+        nota = (f"Fonte: RTN/STN · no ano, projetado até "
+                f"{MES_LABELS.get(_mes_f, _mes_f)}/{_ano_f}")
+    else:
+        nota = "Fonte: RTN/STN · dados não disponíveis"
     st.html(
         f'<div style="background:{C["bg2"]};border:1px solid {C["border"]};'
         f'border-radius:16px;padding:36px 44px;">'
@@ -326,40 +279,13 @@ def _grafico_composicao(itens: list[dict], cor: str, key: str):
 def _render_composicao_obrigatorias():
     """Elemento 4: 4.1 + 4.2 + 4.4.1 + as 4 maiores rubricas de 3 díg. de 4.3.
 
-    O denominador (% do total) segue a MESMA definição de obrigatórias do
-    Elemento 2 (4.1 + 4.2 + 4.3 + 4.4.1); as barras não somam 100% porque
-    exibimos só as principais aberturas de 4.3, sem residual.
+    Cálculo em components/theme.py (composicao_obrigatorias_federal) —
+    compartilhado com pipelines/exportar_web.py.
     """
-    v41  = rtn_soma_12m(df_rtn, "4.1 ",   ano_atual, mes_atual, "constante_milhoes")
-    v42  = rtn_soma_12m(df_rtn, "4.2 ",   ano_atual, mes_atual, "constante_milhoes")
-    v43  = rtn_soma_12m(df_rtn, "4.3 ",   ano_atual, mes_atual, "constante_milhoes")
-    v441 = rtn_soma_12m(df_rtn, "4.4.1 ", ano_atual, mes_atual, "constante_milhoes")
-    if None in (v41, v42, v43, v441):
+    itens = composicao_obrigatorias_federal(df_rtn, ano_atual, mes_atual)
+    if not itens:
         st.info("Sem dados suficientes para a composição das despesas obrigatórias.")
         return
-    total = v41 + v42 + v43 + v441
-
-    # Rubricas de 3 dígitos dentro de 4.3 (ex: '4.3.14 Sentenças Judiciais...').
-    # O regex exige espaço após os 2 dígitos para excluir sub-níveis ('4.3.15.1').
-    rubricas_43 = [
-        d for d in df_rtn["discriminacao"].unique()
-        if re.match(r"^4\.3\.\d{2}\s", d)
-    ]
-    valores_43 = [
-        (d, v) for d in rubricas_43
-        if (v := _soma_12m_label(d)) is not None
-    ]
-    top4 = sorted(valores_43, key=lambda t: t[1], reverse=True)[:4]
-
-    itens = [
-        {"nome": "Benefícios Previdenciários", "valor_mi": v41},
-        {"nome": "Pessoal e Encargos Sociais", "valor_mi": v42},
-        {"nome": "Obrigatórias c/ Controle de Fluxo (saúde, educação, Bolsa Família)",
-         "valor_mi": v441},
-        *[{"nome": _limpar_rubrica(d), "valor_mi": v} for d, v in top4],
-    ]
-    for i in itens:
-        i["pct"] = i["valor_mi"] / total * 100
 
     _section_title(
         "Composição das Despesas Obrigatórias "
@@ -373,36 +299,16 @@ def _render_composicao_obrigatorias():
     )
 
 
-# Rubricas de investimento por natureza da despesa (aba 1.3 da RTN, GND 4).
-# Prefixos com espaço final para casar exatamente uma série cada.
-RUBRICAS_INVEST = [
-    "INV 2.1.1.1 ",   # Obras e instalações
-    "INV 2.1.1.2 ",   # Equipamentos e material permanente
-    "INV 2.1.1.3 ",   # Serviços
-    "INV 2.1.1.4 ",   # Demais aplicações diretas da União
-    "INV 2.1.2 ",     # Transferências a Estados/DF
-    "INV 2.1.3 ",     # Transferências a Municípios
-    "INV 2.1.4 ",     # Outras transferências
-]
-
-
 def _render_composicao_investimentos():
-    """Elemento 5: composição dos investimentos (GND 4) por natureza da despesa."""
-    itens = []
-    for pref in RUBRICAS_INVEST:
-        serie = df_rtn[df_rtn["discriminacao"].str.startswith(pref)]["discriminacao"]
-        if serie.empty:
-            continue
-        v = rtn_soma_12m(df_rtn, pref, ano_atual, mes_atual, "constante_milhoes")
-        if v is not None:
-            itens.append({"nome": _limpar_rubrica(serie.iloc[0]), "valor_mi": v})
+    """Elemento 5: composição dos investimentos (GND 4) por natureza da despesa.
+
+    Cálculo em components/theme.py (composicao_investimentos_federal) —
+    compartilhado com pipelines/exportar_web.py.
+    """
+    itens = composicao_investimentos_federal(df_rtn, ano_atual, mes_atual)
     if not itens:
         st.info("Sem dados da aba 1.3. Execute `python pipelines/federal/load.py`.")
         return
-
-    total = sum(i["valor_mi"] for i in itens)
-    for i in itens:
-        i["pct"] = i["valor_mi"] / total * 100
 
     _section_title(
         "Composição dos Investimentos "
@@ -422,24 +328,11 @@ def _render_resultado_primario():
     _section_title("Trajetória do Resultado Primário — acumulado 12 meses")
     st.caption("Soma rolling de 12 meses. Linha abaixo de zero = déficit acumulado.")
 
-    p_sel = ano_atual * 100 + mes_atual
-    sub_res = (
-        df_rtn[df_rtn["discriminacao"].str.startswith("5. ")]
-        .sort_values(["ano", "mes"])
-    )
-    traj = []
-    for _, row in sub_res.iterrows():
-        a, m = int(row["ano"]), int(row["mes"])
-        if a * 100 + m > p_sel:
-            break
-        v = rtn_soma_12m(df_rtn, "5. ", a, m, "corrente_milhoes")
-        if v is not None:
-            traj.append({"data": pd.Timestamp(f"{a}-{m:02d}-01"), "valor": v / 1e3})
-    if not traj:
+    # Cálculo em components/theme.py — compartilhado com pipelines/exportar_web.py
+    df_traj = serie_resultado_primario(df_rtn, ano_atual, mes_atual)
+    if df_traj.empty:
         st.info("Sem dados de resultado primário.")
         return
-
-    df_traj = pd.DataFrame(traj)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df_traj["data"], y=df_traj["valor"],

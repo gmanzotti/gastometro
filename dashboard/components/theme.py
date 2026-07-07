@@ -8,6 +8,7 @@ Importar em cada página:
 
 import base64
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -492,95 +493,6 @@ def carregar_geojson_municipios() -> dict | None:
 
 # ── Cálculos subnacionais ──────────────────────────────────────────────────
 
-def _rolling12_siconfi(df_base: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcula invest_ratio em rolling 12 meses a partir de dados SICONFI bimestrais.
-
-    O SICONFI reporta valores ACUMULADOS desde janeiro ("ATÉ O BIMESTRE"), então
-    para obter um janela de 12 meses que não fique presa ao ciclo jan-bim usamos:
-
-        rolling_12m = B_max(ano_atual) + [B6(ano-1) − B_max(ano-1)]
-                    = gasto jan→bim_atual/2026 + gasto bim+1→dez/2025
-
-    Isso neutraliza a sazonalidade do investimento, que se concentra no fim do ano
-    (estados correm para executar orçamento antes de dezembro fechar).
-
-    Se dados do ano anterior não estiverem disponíveis para um ente, usa apenas o
-    período atual como fallback (sem rolling).
-    """
-    max_ano = df_base["ano"].max()
-    cobertura = (
-        df_base[df_base["ano"] == max_ano]
-        .groupby("periodo")["cod_ibge"].nunique()
-    )
-    max_bim = int(cobertura.idxmax())
-    ano_ant = max_ano - 1
-
-    def _agregar(ano: int, bim: int) -> pd.DataFrame:
-        sub = df_base[(df_base["ano"] == ano) & (df_base["periodo"] == bim)]
-        inv = (
-            sub[sub["cod_conta"].isin({"Investimentos", "InversoesFinanceiras"})]
-            .groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"].sum()
-            .reset_index().rename(columns={"valor_milhoes": "inv"})
-        )
-        tot = (
-            sub[sub["cod_conta"] == "DespesasExcetoIntraOrcamentarias"]
-            .groupby(["cod_ibge", "uf", "ente"])["valor_milhoes"].sum()
-            .reset_index().rename(columns={"valor_milhoes": "tot"})
-        )
-        return inv.merge(tot, on=["cod_ibge", "uf", "ente"], how="inner")
-
-    curr   = _agregar(max_ano, max_bim)   # jan→bim_max do ano atual
-    b6_ant = _agregar(ano_ant, 6)          # jan→dez do ano anterior (B6 = ano completo)
-    bx_ant = _agregar(ano_ant, max_bim)    # jan→bim_max do ano anterior (para subtrair)
-
-    m = (
-        curr
-        .merge(b6_ant.rename(columns={"inv": "inv_b6", "tot": "tot_b6"}),
-               on=["cod_ibge", "uf", "ente"], how="left")
-        .merge(bx_ant.rename(columns={"inv": "inv_bx", "tot": "tot_bx"}),
-               on=["cod_ibge", "uf", "ente"], how="left")
-    )
-
-    # Onde o complemento do ano anterior está disponível, aplica rolling 12m
-    tem_roll = m["inv_b6"].notna() & m["inv_bx"].notna()
-    m["invest_milhoes"] = m["inv"].where(
-        ~tem_roll, m["inv"] + m["inv_b6"] - m["inv_bx"]
-    )
-    m["total_milhoes"] = m["tot"].where(
-        ~tem_roll, m["tot"] + m["tot_b6"] - m["tot_bx"]
-    )
-
-    m = m[m["total_milhoes"] > 0].copy()
-    m["invest_ratio"] = (m["invest_milhoes"] / m["total_milhoes"] * 100).round(2)
-    m["ano"]     = max_ano
-    m["periodo"] = max_bim
-    return (
-        m[["cod_ibge", "uf", "ente", "invest_ratio",
-           "invest_milhoes", "total_milhoes", "ano", "periodo"]]
-        .sort_values("invest_ratio", ascending=False)
-    )
-
-
-def calcular_ratio_investimento_estados(df_estados: pd.DataFrame) -> pd.DataFrame:
-    """Ratio invest/total em rolling 12 meses para estados + DF."""
-    if df_estados.empty:
-        return pd.DataFrame()
-    df = df_estados[
-        df_estados["coluna"] == "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
-    ].copy()
-    return _rolling12_siconfi(df)
-
-
-def calcular_ratio_investimento_municipios(df_municipios: pd.DataFrame) -> pd.DataFrame:
-    """Ratio invest/total em rolling 12 meses para municípios."""
-    if df_municipios.empty:
-        return pd.DataFrame()
-    df = df_municipios[
-        df_municipios["coluna"] == "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
-    ].copy()
-    return _rolling12_siconfi(df)
-
 
 def calcular_serie_estado(
     df_estados: pd.DataFrame,
@@ -635,24 +547,82 @@ def rtn_delta_yoy(
 
 
 # ── Termômetro de investimento (compartilhado entre Geral e Federal) ──────
+#
+# Desde 07/07/2026 o termômetro usa a MESMA base YTD das abas Estadual e
+# Municipal ("projeção até o período corrente"), e não mais rolling 12 meses.
+# Motivo: com bases diferentes, a aba Geral mostrava invest% ≠ aba Estadual
+# para a mesma esfera (~0,7 p.p. no 1º semestre), abrindo flanco de
+# contestação. O federal é o espelho MENSAL da fórmula bimestral subnacional:
+#
+#     total = Σ realizado(ano, jan..último mês real)
+#           + ratio × Σ âncora(ano-1, meses até o mês corrente)
+#
+# O plano (ratio, último real, meses a projetar) vem do bloco federal do
+# contador (JSON) — o termômetro reproduz exatamente a conta do contador.
 
-def ratio_federal(df: pd.DataFrame) -> tuple | None:
-    """(invest_pct, invest_mi, total_mi) usando RTN — rolling 12 meses.
+def _parse_mes(s: str) -> tuple[int, int]:
+    """'2026-05' → (2026, 5)."""
+    ano, mes = s.split("-")
+    return int(ano), int(mes)
+
+
+def _prox_mes(ano: int, mes: int) -> tuple[int, int]:
+    return (ano + 1, 1) if mes == 12 else (ano, mes + 1)
+
+
+def ratio_federal(df: pd.DataFrame, bloco: dict | None = None) -> tuple | None:
+    """(invest_pct, invest_mi, total_mi, (ano_ref, mes_ref)) usando RTN — base
+    "no ano, projetado até o mês corrente" (espelho mensal da base subnacional).
 
     Usa a série memo 'Investimento' da aba 1.2 (idêntica ao total da aba 1.3:
-    investimentos GND 4 + inversões GND 5 + ajuste de OB), não a proxy de
-    Discricionárias que incluía custeio discricionário.
+    investimentos GND 4 + inversões GND 5 + ajuste de OB) e a despesa total
+    '4. ', em R$ correntes — mesma moeda do contador (dentro do ano a inflação
+    não distorce o ratio; a regra do IPCA vale para somas de 12 meses).
+    `bloco` é o nó "federal" do contador_fiscal.json; sem ele, deriva o plano
+    do próprio dado com ratio neutro (1.0), como faz _plano_projecao.
     """
     if df.empty:
         return None
-    ano  = int(df["ano"].max())
-    mes  = int(df[df["ano"] == ano]["mes"].max())
-    col  = "corrente_milhoes"
-    tot  = rtn_soma_12m(df, "4. ",          ano, mes, col)
-    inv  = rtn_soma_12m(df, "Investimento", ano, mes, col)
-    if tot is None or inv is None or tot == 0:
+
+    # Plano de projeção: prioriza o contador p/ replicar exatamente sua conta
+    if bloco and bloco.get("ultimo_dado") and bloco.get("mes_referencia_fim"):
+        ratio = float(bloco.get("ratio_rolling", 1.0))
+        ult   = _parse_mes(bloco["ultimo_dado"])
+        fim   = _parse_mes(bloco["mes_referencia_fim"])
+        ini   = _parse_mes(bloco.get("mes_referencia", bloco["mes_referencia_fim"]))
+    else:
+        from datetime import datetime  # import local, como em _bimestre_corrente
+        ratio   = 1.0
+        ult_ano = int(df["ano"].max())
+        ult     = (ult_ano, int(df[df["ano"] == ult_ano]["mes"].max()))
+        _hoje = datetime.now()
+        fim   = (_hoje.year, _hoje.month)
+        ini   = _prox_mes(*ult)
+
+    proj: list[tuple[int, int]] = []
+    a, m = ini
+    while (a, m) <= fim and len(proj) < 12:
+        proj.append((a, m))
+        a, m = _prox_mes(a, m)
+
+    def _projetar_serie(prefixo: str) -> float:
+        """Realizado no ano + âncora sazonal (mesmos meses do ano anterior) × ratio."""
+        sub = df[df["discriminacao"].str.startswith(prefixo)]
+        realizado = sub[
+            (sub["ano"] == ult[0]) & (sub["mes"] <= ult[1])
+        ]["corrente_milhoes"].sum()
+        ancora = sum(
+            sub[(sub["ano"] == ap - 1) & (sub["mes"] == mp)]["corrente_milhoes"].sum()
+            for ap, mp in proj
+        )
+        return float(realizado + ancora * ratio)
+
+    tot = _projetar_serie("4. ")
+    inv = _projetar_serie("Investimento")
+    if tot <= 0:
         return None
-    return round(inv / tot * 100, 1), inv, tot
+    ano_ref, mes_ref = proj[-1] if proj else ult
+    return round(inv / tot * 100, 1), inv, tot, (ano_ref, mes_ref)
 
 
 def linha_termometro(
@@ -897,6 +867,197 @@ def calcular_scatter_correntes_invest(
         .sort_values("invest_ratio", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def ratio_ytd_subnacional(df: pd.DataFrame, bloco: dict | None) -> tuple | None:
+    """(invest_pct, invest_mi, total_mi, (ano_ref, bim_ref)) do consolidado de
+    uma esfera subnacional, na base unificada "projeção até o bimestre corrente".
+
+    Usado pelo termômetro da aba Geral. Deriva os números da MESMA
+    calcular_categorias_projetadas que alimenta a composição e a barra das abas
+    Estadual/Municipal — igualdade entre as abas por construção, não por
+    coincidência. `bloco` é o nó _consolidado da esfera no contador_fiscal.json.
+    """
+    cats = calcular_categorias_projetadas(df, None, bloco)
+    if cats.empty:
+        return None
+    tot = float(cats["valor_projetado"].sum())
+    inv = float(
+        cats[cats["cod_conta"].isin(_CONTAS_INVEST)]["valor_projetado"].sum()
+    )
+    if tot <= 0:
+        return None
+    ano_ref = int(cats["ano"].iloc[0])
+    bim_ref = int(cats["periodo"].iloc[0])
+    return round(inv / tot * 100, 1), inv, tot, (ano_ref, bim_ref)
+
+
+# ── Cálculos federais (RTN) — compartilhados: aba Federal + exportar_web ───
+#
+# Extraídos de dashboard/pages/federal.py em 07/07/2026 para que o pipeline
+# pipelines/exportar_web.py (camada web consumida pelo site da TI) use a MESMA
+# matemática da aba Federal — a duplicação de lógica entre o protótipo e o
+# script de exportação da TI foi a causa raiz das divergências entre os sites.
+
+def limpar_rubrica(label: str) -> str:
+    """Remove numeração, prefixo INV e notas de rodapé ('4/') do nome da rubrica."""
+    s = re.sub(r"^INV\s+", "", label)        # prefixo das séries da aba 1.3
+    s = re.sub(r"^[\d\.]+\s+", "", s)        # numeração ("4.3.14", "2.1.1.1"...)
+    s = re.sub(r"\s+\d+/\s*$", "", s)        # nota de rodapé no fim ("4/")
+    return s.strip()
+
+
+def rtn_soma_12m_exata(df: pd.DataFrame, label: str, a: int, m: int) -> float | None:
+    """Soma 12 meses de uma série pelo nome EXATO, em R$ CONSTANTES.
+
+    Diferente de rtn_soma_12m (que usa startswith), a igualdade exata evita
+    dupla contagem com sub-rubricas: '4.3.01 Abono e Seguro Desemprego' tem
+    filhas '4.3.01.1 Abono' e '4.3.01.2 Seguro Desemprego' que seriam
+    capturadas por um filtro de prefixo.
+
+    R$ constantes (IPCA) porque somar 12 meses em R$ correntes subestima o
+    total em moeda de hoje (~2,5% com IPCA a ~5% a.a.) — é o padrão da
+    própria STN na tabela 1.2-B da RTN ("Acumulado em 12 meses").
+    """
+    sub  = df[df["discriminacao"] == label]
+    m_ini, a_ini = (m + 1, a - 1) if m < 12 else (1, a)
+    mask = (
+        ((sub["ano"] > a_ini) | ((sub["ano"] == a_ini) & (sub["mes"] >= m_ini))) &
+        ((sub["ano"] < a)     | ((sub["ano"] == a)     & (sub["mes"] <= m)))
+    )
+    vals = sub[mask]["constante_milhoes"].dropna()
+    return float(vals.sum()) if len(vals) >= 6 else None
+
+
+def serie_12m_pct_total(df: pd.DataFrame, prefixos: tuple) -> pd.DataFrame:
+    """Acumulado 12 meses da série como % da Despesa Total (também em 12m).
+
+    Em % da despesa, deflator e crescimento real se cancelam — a leitura vira
+    pura composição do orçamento, sem ruído de inflação. Base do Elemento 2
+    da aba Federal (obrigatórias × discricionárias × investimentos).
+    """
+    def _soma_12m(prefs: tuple) -> pd.DataFrame:
+        sub = df[df["discriminacao"].str.startswith(prefs)]
+        # R$ constantes: numerador e denominador na mesma moeda do mesmo mês
+        # (ratio de somas nominais daria peso menor aos meses mais antigos)
+        mensal = (
+            sub.groupby(["ano", "mes"], as_index=False)["constante_milhoes"].sum()
+            .sort_values(["ano", "mes"])
+        )
+        # rolling(12): soma janela móvel de 12 meses — neutraliza a sazonalidade
+        # (dezembro concentra pagamentos de precatórios, 13º, restos a executar)
+        mensal["v12"] = mensal["constante_milhoes"].rolling(12).sum()
+        return mensal[["ano", "mes", "v12"]]
+
+    serie = _soma_12m(prefixos)
+    total = _soma_12m(("4. ",)).rename(columns={"v12": "v12_total"})
+    m = serie.merge(total, on=["ano", "mes"])
+    m["pct"]  = m["v12"] / m["v12_total"] * 100
+    m["data"] = pd.to_datetime(
+        m["ano"].astype(str) + "-" + m["mes"].astype(str).str.zfill(2) + "-01"
+    )
+    return m.dropna(subset=["pct"])
+
+
+def composicao_obrigatorias_federal(
+    df: pd.DataFrame, ano: int, mes: int
+) -> list[dict]:
+    """Itens do Elemento 4 federal: 4.1 + 4.2 + 4.4.1 + top-4 rubricas de 4.3.
+
+    Retorna [{nome, valor_mi, pct}], em R$ constantes, 12 meses até ano/mes.
+    O denominador (% do total) segue a MESMA definição de obrigatórias do
+    Elemento 2 (4.1 + 4.2 + 4.3 + 4.4.1); as barras não somam 100% porque
+    exibimos só as principais aberturas de 4.3, sem residual.
+    """
+    v41  = rtn_soma_12m(df, "4.1 ",   ano, mes, "constante_milhoes")
+    v42  = rtn_soma_12m(df, "4.2 ",   ano, mes, "constante_milhoes")
+    v43  = rtn_soma_12m(df, "4.3 ",   ano, mes, "constante_milhoes")
+    v441 = rtn_soma_12m(df, "4.4.1 ", ano, mes, "constante_milhoes")
+    if None in (v41, v42, v43, v441):
+        return []
+    total = v41 + v42 + v43 + v441
+
+    # Rubricas de 3 dígitos dentro de 4.3 (ex: '4.3.14 Sentenças Judiciais...').
+    # O regex exige espaço após os 2 dígitos para excluir sub-níveis ('4.3.15.1').
+    rubricas_43 = [
+        d for d in df["discriminacao"].unique()
+        if re.match(r"^4\.3\.\d{2}\s", d)
+    ]
+    valores_43 = [
+        (d, v) for d in rubricas_43
+        if (v := rtn_soma_12m_exata(df, d, ano, mes)) is not None
+    ]
+    top4 = sorted(valores_43, key=lambda t: t[1], reverse=True)[:4]
+
+    itens = [
+        {"nome": "Benefícios Previdenciários", "valor_mi": v41},
+        {"nome": "Pessoal e Encargos Sociais", "valor_mi": v42},
+        {"nome": "Obrigatórias c/ Controle de Fluxo (saúde, educação, Bolsa Família)",
+         "valor_mi": v441},
+        *[{"nome": limpar_rubrica(d), "valor_mi": v} for d, v in top4],
+    ]
+    for i in itens:
+        i["pct"] = i["valor_mi"] / total * 100
+    return itens
+
+
+# Rubricas de investimento por natureza da despesa (aba 1.3 da RTN, GND 4).
+# Prefixos com espaço final para casar exatamente uma série cada.
+RUBRICAS_INVEST_FEDERAL = [
+    "INV 2.1.1.1 ",   # Obras e instalações
+    "INV 2.1.1.2 ",   # Equipamentos e material permanente
+    "INV 2.1.1.3 ",   # Serviços
+    "INV 2.1.1.4 ",   # Demais aplicações diretas da União
+    "INV 2.1.2 ",     # Transferências a Estados/DF
+    "INV 2.1.3 ",     # Transferências a Municípios
+    "INV 2.1.4 ",     # Outras transferências
+]
+
+
+def composicao_investimentos_federal(
+    df: pd.DataFrame, ano: int, mes: int
+) -> list[dict]:
+    """Itens do Elemento 5 federal: investimentos (GND 4) por natureza da despesa.
+
+    Retorna [{nome, valor_mi, pct}], em R$ constantes, 12 meses até ano/mes.
+    Exclui inversões financeiras (GND 5).
+    """
+    itens = []
+    for pref in RUBRICAS_INVEST_FEDERAL:
+        serie = df[df["discriminacao"].str.startswith(pref)]["discriminacao"]
+        if serie.empty:
+            continue
+        v = rtn_soma_12m(df, pref, ano, mes, "constante_milhoes")
+        if v is not None:
+            itens.append({"nome": limpar_rubrica(serie.iloc[0]), "valor_mi": v})
+    if not itens:
+        return []
+    total = sum(i["valor_mi"] for i in itens)
+    for i in itens:
+        i["pct"] = i["valor_mi"] / total * 100
+    return itens
+
+
+def serie_resultado_primario(df: pd.DataFrame, ano: int, mes: int) -> pd.DataFrame:
+    """Trajetória do resultado primário ('5. ') acumulado 12m, em R$ bilhões.
+
+    Colunas: data (Timestamp), valor (R$ bi, nominal — pendência conhecida de
+    migração p/ R$ constantes registrada no afazeres.txt). Base do Elemento 6.
+    """
+    p_sel = ano * 100 + mes
+    sub_res = (
+        df[df["discriminacao"].str.startswith("5. ")]
+        .sort_values(["ano", "mes"])
+    )
+    traj = []
+    for _, row in sub_res.iterrows():
+        a, m = int(row["ano"]), int(row["mes"])
+        if a * 100 + m > p_sel:
+            break
+        v = rtn_soma_12m(df, "5. ", a, m, "corrente_milhoes")
+        if v is not None:
+            traj.append({"data": pd.Timestamp(f"{a}-{m:02d}-01"), "valor": v / 1e3})
+    return pd.DataFrame(traj)
 
 
 # ── Interno ────────────────────────────────────────────────────────────────

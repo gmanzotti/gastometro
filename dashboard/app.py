@@ -23,9 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from components.theme import (
     C, inject_css, render_navbar, render_footer,
     carregar_dados,
-    calcular_ratio_investimento_estados,
-    calcular_ratio_investimento_municipios,
+    ratio_ytd_subnacional,
     ratio_federal, linha_termometro, termometro_header,
+    MES_LABELS,
 )
 
 st.set_page_config(
@@ -215,17 +215,6 @@ def _render_hero():
 
 # ── Termômetro de investimento — largura total, 4 esferas ────────────────
 
-def _ratio_esfera(ratio_df: pd.DataFrame | None) -> tuple | None:
-    """(invest_pct, invest_mi, total_mi) a partir de um DataFrame de ratio por ente."""
-    if ratio_df is None or ratio_df.empty:
-        return None
-    inv = ratio_df["invest_milhoes"].sum()
-    tot = ratio_df["total_milhoes"].sum()
-    if tot == 0:
-        return None
-    return round(inv / tot * 100, 1), inv, tot
-
-
 def _ratio_total(*ratios: tuple | None) -> tuple | None:
     """Média ponderada de todas as esferas disponíveis."""
     inv_sum = sum(r[1] for r in ratios if r is not None)
@@ -236,29 +225,35 @@ def _ratio_total(*ratios: tuple | None) -> tuple | None:
 
 
 def _render_termometro():
-    ratio_est = calcular_ratio_investimento_estados(df_est) if tem_est else None
-    ratio_mun = calcular_ratio_investimento_municipios(df_mun) if tem_mun else None
-
-    r_est = _ratio_esfera(ratio_est)
-    r_mun = _ratio_esfera(ratio_mun)
-    r_fed = ratio_federal(df_rtn) if tem_rtn else None
+    # Base YTD unificada (decisão 07/07/2026): as três esferas usam a MESMA
+    # projeção "no ano, até o período corrente" das abas Estadual/Municipal e
+    # do contador — a Geral mostra exatamente o que as outras abas mostram.
+    r_est = ratio_ytd_subnacional(df_est, _bloco_contador("estados"))    if tem_est else None
+    r_mun = ratio_ytd_subnacional(df_mun, _bloco_contador("municipios")) if tem_mun else None
+    r_fed = ratio_federal(df_rtn, _bloco_contador("federal"))            if tem_rtn else None
     r_tot = _ratio_total(r_fed, r_est, r_mun)
 
-    # Notas de fonte para cada linha
-    nota_tot = "Setor público consolidado · rolling 12 meses"
-    nota_fed = "Fonte: RTN/STN · abas 1.3/1.3-A · rolling 12 meses"
-    if ratio_est is not None and not ratio_est.empty:
-        _ano_e = int(ratio_est["ano"].iloc[0])
-        _bim_e = int(ratio_est["periodo"].iloc[0])
-        nota_est = f"Fonte: SICONFI · rolling 12m até {_ano_e}-B{_bim_e} · {len(ratio_est)} estados + DF"
+    # Notas de fonte para cada linha (referência = fim do horizonte projetado)
+    nota_tot = "Setor público consolidado · no ano, até o período corrente"
+    if r_fed is not None:
+        _ano_f, _mes_f = r_fed[3]
+        nota_fed = (f"Fonte: RTN/STN · no ano, projetado até "
+                    f"{MES_LABELS.get(_mes_f, _mes_f)}/{_ano_f}")
+    else:
+        nota_fed = "Fonte: RTN/STN · dados não disponíveis"
+    if r_est is not None:
+        _ano_e, _bim_e = r_est[3]
+        _n_est = int(df_est["cod_ibge"].nunique())
+        nota_est = (f"Fonte: SICONFI · no ano, projetado até {_ano_e}-B{_bim_e} · "
+                    f"{_n_est} estados + DF")
     else:
         nota_est = "Fonte: SICONFI · dados não disponíveis"
-    if ratio_mun is not None and not ratio_mun.empty:
-        _ano_m = int(ratio_mun["ano"].iloc[0])
-        _bim_m = int(ratio_mun["periodo"].iloc[0])
+    if r_mun is not None:
+        _ano_m, _bim_m = r_mun[3]
         _n_mun = int(df_mun["cod_ibge"].nunique()) if tem_mun else 0
         escopo = f"{_n_mun:,} municípios".replace(",", ".") if _n_mun > 500 else f"{_n_mun} capitais (protótipo)"
-        nota_mun = f"Fonte: SICONFI · rolling 12m até {_ano_m}-B{_bim_m} · {escopo}"
+        nota_mun = (f"Fonte: SICONFI · no ano, projetado até {_ano_m}-B{_bim_m} · "
+                    f"{escopo}")
     else:
         nota_mun = "Fonte: SICONFI · dados não disponíveis"
 

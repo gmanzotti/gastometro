@@ -30,9 +30,12 @@ sys.path.insert(0, str(BASE / "dashboard"))
 from components.theme import (  # noqa: E402
     calcular_categorias_projetadas,
     calcular_scatter_correntes_invest,
+    ratio_federal,
+    ratio_ytd_subnacional,
 )
 
 ESTADOS_PARQUET = BASE / "data" / "estados" / "gastos_estados.parquet"
+RTN_PARQUET     = BASE / "data" / "rtn" / "rtn_mensal.parquet"
 CONTADOR_JSON   = BASE / "data" / "contador_fiscal.json"
 
 # Tolerância relativa: o dashboard lê o ratio já arredondado (6 casas) do JSON,
@@ -134,3 +137,47 @@ def test_tabela_consolidada_proxima_do_contador(dados):
     assert soma_tabela == pytest.approx(meta_cons, rel=2e-3), (
         f"tabela soma {soma_tabela:,.0f} vs contador {meta_cons:,.0f} mi"
     )
+
+
+# ── Termômetro da aba Geral (alinhado à base YTD em 07/07/2026) ─────────────
+#
+# A linha "Estados + DF" do termômetro da Geral deve mostrar EXATAMENTE o mesmo
+# total e invest% que a composição/barra da aba Estadual (consolidado). Antes,
+# a Geral usava rolling 12m e divergia ~0,7 p.p. no 1º semestre.
+
+
+def test_termometro_geral_bate_composicao_estadual(dados):
+    df, est = dados
+    bloco = est["_consolidado"]
+    r = ratio_ytd_subnacional(df, bloco)
+    assert r is not None
+
+    cats = calcular_categorias_projetadas(df, None, bloco)
+    soma_comp = float(cats["valor_projetado"].sum())
+
+    assert r[2] == pytest.approx(soma_comp, rel=TOL_REL), (
+        f"termômetro total {r[2]:,.0f} ≠ composição {soma_comp:,.0f} mi"
+    )
+    inv_comp = float(
+        cats[cats["cod_conta"].isin({"Investimentos", "InversoesFinanceiras"})]
+        ["valor_projetado"].sum()
+    )
+    assert r[1] == pytest.approx(inv_comp, rel=TOL_REL)
+    assert r[0] == round(inv_comp / soma_comp * 100, 1)
+
+
+def test_termometro_federal_replica_contador():
+    """ratio_federal (base YTD) deve reproduzir a meta do contador federal
+    (acc + previsão), pois usa o mesmo plano de projeção do JSON."""
+    if not RTN_PARQUET.exists() or not CONTADOR_JSON.exists():
+        pytest.skip("parquet RTN ou contador_fiscal.json ausente")
+    df_rtn = pd.read_parquet(RTN_PARQUET)
+    bloco = json.loads(CONTADOR_JSON.read_text(encoding="utf-8"))["federal"]
+
+    r = ratio_federal(df_rtn, bloco)
+    assert r is not None
+    meta = (bloco["acc_base_rs"] + bloco["previsao_total_rs"]) / 1e6
+    assert r[2] == pytest.approx(meta, rel=TOL_REL), (
+        f"termômetro federal {r[2]:,.0f} ≠ meta do contador {meta:,.0f} mi"
+    )
+    assert 0 < r[0] < 100  # sanidade do ratio
