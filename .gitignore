@@ -14,6 +14,10 @@ data/emendas/
 # Rascunhos pessoais do Gustavo (screenshots, scripts de apoio) — não versionar
 rascunhos/
 
+# Cópias dos dados extraídos pela TI (recebidas p/ auditoria em 07/07/2026;
+# ~15 MB, a fonte é o ambiente da TI — não versionar)
+base_dados_TI/
+
 # Python
 __pycache__/
 *.py[cod]
