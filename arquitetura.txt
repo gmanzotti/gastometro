@@ -1,7 +1,7 @@
 ================================================================================
 ARQUITETURA — GASTÔMETRO FIESP
 Documento interno compartilhado entre Assessoria Econômica, TI e Marketing
-Última revisão: 2026-07-07
+Última revisão: 2026-07-08
 ================================================================================
 
 Este documento registra as decisões de arquitetura do projeto e o contrato
@@ -87,6 +87,17 @@ Assessoria). Metodologia detalhada por elemento do site: notas_metodologicas.doc
              50 mil+ hab. estão cobertos (92,7% da população). Decisão:
              manter cobertura bimestral com nota de esclarecimento no site;
              avaliar consulta semestral complementar no futuro.
+
+[2026-07-08] Diagnóstico de 07/07 RECONFIRMADO com dados reprocessados pela
+             TI: parquets seguem corretos (SP recalculado R$ 278,7 bi, igual
+             ao apontado antes); a camada web publicada no ADLS não foi
+             regenerada desde 2026-07-06 (schema_version 1, script antigo) —
+             o site segue mostrando os números pré-diagnóstico. TI respondeu
+             por e-mail concordando em adotar exportar_web.py sem
+             reprocessar os parquets. Achado novo: o frontend do protótipo
+             HTML (gastometro.js) não tem código para consumir
+             municipios_composicao_gastos.json — publicar o arquivo não
+             basta, é preciso também alterar o JS (ver seção 7).
 
 
 3. PIPELINES (Camada 1 — o que a TI executa)
@@ -290,10 +301,23 @@ template — iniciar antes da automação.
     2036. Qualquer visitante pode sobrescrever os dados do site. Substituir
     por SAS somente-leitura (sp=rl) de validade curta com rotação — ou servir
     os JSONs por endpoint próprio — e REVOGAR o token atual (já público).
+    [08/07] TI respondeu que vai "aplicar regra de acesso somente leitura,
+    restringindo permissões de escrita às rotinas internas" — insuficiente
+    sozinho: publicar um SAS novo não invalida o antigo, já exposto e válido
+    até 2036. Cobrar a revogação/regeneração explícita do token vazado.
 
 [ ] Adotar pipelines/exportar_web.py como fonte única da camada web (executar
     após as cargas; publicar data/web/ no ADLS). Aposentar o script próprio de
-    geração de JSONs.
+    geração de JSONs. [08/07] TI concordou por e-mail; vai rodar sobre os
+    parquets já validados, sem reprocessamento completo. Ainda não executado
+    — confirmar antes da reunião de 13/07 checando gerado_em/schema_version
+    dos JSONs publicados (hoje: 2026-07-06, schema_version 1 = script antigo).
+
+[ ] Frontend do protótipo HTML (gastometro.js) não tem código para consumir
+    municipios_composicao_gastos.json (só existe renderEstadoCompositionCard
+    para a aba estadual). Publicar o arquivo via exportar_web.py não é
+    suficiente para a composição municipal aparecer — falta alterar o JS.
+    Definir quem mantém esse arquivo hoje (TI ou já é escopo do Marketing).
 
 [ ] Extração municipal: filtrar consórcios públicos (entram sob o cod_ibge do
     município-sede) e investigar 3 municípios com dados degenerados na origem

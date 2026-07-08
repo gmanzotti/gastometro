@@ -747,3 +747,104 @@ PRÓXIMOS PASSOS
            formato do dashboard com o chefe (pendências antigas).
 
 ================================================================================
+
+=== Iniciando sessão de 08/07/2026 ===
+
+--------------------------------------------------------------------------------
+RECONFIRMAÇÃO DO DIAGNÓSTICO COM DADOS REPROCESSADOS PELA TI
+--------------------------------------------------------------------------------
+
+Contexto: às 18h de 07/07 (depois do diagnóstico fechado) a TI reprocessou os
+dados por conta própria e pediu para refazer a checagem — sem esperar a reunião
+combinada. Reação do Gustavo registrada (não é a 1ª vez que agem antes do
+combinado). Precisava confirmar se o diagnóstico de 07/07 se mantinha com os
+parquets/contador_fiscal.json novos (em base_dados_TI/, substituídos por eles).
+
+[FEITO] Recalculado SP e o consolidado de estados a partir dos parquets NOVOS
+        da TI, usando a metodologia vigente (theme.py, sem alterar data/):
+        SP = R$ 278,73 bi / 7,28% invest.; consolidado estados = R$ 1.079,74 bi
+        / 9,5% — praticamente idêntico ao valor "correto" apontado em 07/07
+        (diferença é só arredondamento). Confirma que os dados de entrada
+        continuam corretos.
+
+[FEITO] Verificado que rtn_mensal.parquet novo já traz maio/2026; que
+        gastos_municipios.parquet novo (3.527 entes) AINDA tem os 68
+        consórcios misturados e os 3 municípios degenerados (Piripá-BA,
+        Tobias Barreto-SE, S. Francisco do Conde-BA) — sem mudança da TI
+        na extração ainda.
+
+[FEITO] ACHADO CENTRAL: puxados os JSONs que o site ao vivo
+        (apps.fiesp.com.br/gastometro) realmente lê no ADLS (via SAS exposto
+        no config.js — segue público, ver abaixo). `estados_mapa.json` e
+        `estados_composicao_gastos.json` publicados têm "gerado_em":
+        "2026-07-06T14:31:04" e "schema_version": 1 — ou seja, a camada web
+        NÃO foi regenerada desde ANTES do diagnóstico de 07/07. SP no site:
+        R$ 392.067,77 mi/8,66% no mapa e R$ 182.172,56 mi na composição —
+        EXATAMENTE os números "errados" que já tínhamos apontado. Conclusão:
+        o reprocessamento da TI mexeu nos parquets (dados de entrada), mas
+        não tocou no script/publicação que gera a camada web do site. O
+        diagnóstico de 07/07 se confirma integralmente, sem alteração.
+
+[FEITO] ACHADO NOVO — gap de frontend na aba municipal: baixado e inspecionado
+        o gastometro.js ao vivo. Ele tem `renderEstadoCompositionCard` (lê
+        estados_composicao_gastos.json) — por isso a aba estadual já abre
+        todas as contas (só com números errados, que vão se corrigir sozinhos
+        quando a camada web for republicada). NÃO existe função equivalente
+        para município (nenhuma referência a municipios_composicao_gastos.json
+        no JS). Ou seja: mesmo depois da TI rodar exportar_web.py e publicar
+        esse arquivo (que já existe, gerado desde 07/07), o site vai CONTINUAR
+        mostrando só correntes-vs-investimento na aba municipal até alguém
+        alterar o gastometro.js para buscar e renderizar o arquivo novo —
+        é um passo de frontend, não só de dados/pipeline.
+
+[FEITO] Enviado o diagnóstico atualizado à TI. Resposta recebida (mesmo dia):
+        concordam que a extração dos parquets está validada; concordam que a
+        divergência remanescente é a camada web; vão adotar
+        pipelines/exportar_web.py substituindo o script próprio deles; NÃO
+        vão reprocessar os parquets de novo, só rodar a nova exportação sobre
+        os dados já validados; sobre o SAS, vão "aplicar regra de acesso
+        somente leitura, restringindo permissões de escrita às rotinas
+        internas".
+
+[FEITO] Confirmado ao Gustavo, para resposta à TI:
+        1. Extração validada com ressalva: estados/RTN 100% ok; municípios tem
+           os 2 itens residuais (consórcios + 3 degenerados) ainda abertos,
+           não bloqueiam o exportar_web.py mas seguem pendentes na origem.
+        2. exportar_web.py LÊ o contador_fiscal.json existente, não o
+           regenera — como não vão reprocessar os parquets, precisam garantir
+           que o contador_fiscal.json atual já reflete os parquets validados
+           (é o caso, é o mesmo lote que nos enviaram).
+        3. Código não mudou desde a validação: pipelines/exportar_web.py
+           segue no commit 1edcf15 (HEAD do repositório), a mesma versão
+           validada em 07/07 e revalidada hoje com os dados novos.
+        4. Resposta da TI sobre segurança é INSUFICIENTE como está: criar um
+           SAS novo somente-leitura não invalida o SAS de escrita/deleção que
+           JÁ ESTÁ público (válido até 2036) — quem copiou a string continua
+           podendo escrever/deletar. Precisam REVOGAR/regenerar especifica-
+           mente o token exposto (regenerar a chave de conta usada para
+           assiná-lo, ou revogar a stored access policy), não só adicionar
+           um novo em paralelo.
+        5. Gap de frontend municipal (achado acima) — perguntar quem mantém
+           o gastometro.js hoje (TI ou já é escopo do Marketing) antes de dar
+           o diagnóstico como fechado.
+
+[FEITO] Adendo registrado em rascunhos/diagnostico_streamlit_vs_html_TI_20260707.md
+        com os achados de hoje (não versionado — rascunhos/ fora do git).
+
+--------------------------------------------------------------------------------
+PRÓXIMOS PASSOS
+--------------------------------------------------------------------------------
+
+[PENDENTE] Reunião de segunda-feira (13/07/2026): usar o adendo de 08/07 como
+           prova de que o site ainda está no estado pré-diagnóstico; cobrar
+           execução do exportar_web.py, revogação efetiva do SAS antigo, e
+           esclarecer quem resolve o gap de frontend municipal.
+
+[PENDENTE] Acompanhar se a TI de fato roda exportar_web.py e republica
+           data/web/ no ADLS antes da reunião (verificar gerado_em/
+           schema_version nos JSONs ao vivo para confirmar).
+
+[PENDENTE] Extração municipal: consórcios + 3 municípios degenerados seguem
+           sem correção na origem (item antigo da pauta, ainda aberto).
+
+================================================================================

@@ -182,15 +182,40 @@ pessoais do Gustavo — já no .gitignore).
   cosméticos do HTML da TI.
 - **SEGURANÇA (urgente, comunicado em 07/07)**: o config.js público do site da
   TI expõe SAS do ADLS com ESCRITA/DELEÇÃO válido até 2036. Pedir token
-  somente-leitura curto + rotação do atual.
+  somente-leitura curto + rotação do atual. Resposta da TI em 08/07: vão
+  "aplicar regra de acesso somente leitura" — INSUFICIENTE sozinho, pois não
+  invalida o token já exposto; insistir na revogação/regeneração explícita
+  do SAS vazado (regenerar a chave de conta ou revogar a stored access
+  policy), não só publicar um novo em paralelo.
 - Divergências de números com o site: causa raiz era a camada web da TI
   (metodologia antiga reimplementada) — resolvido com pipelines/exportar_web.py
-  (ver diagnóstico completo em rascunhos/diagnostico_streamlit_vs_html_TI_20260707.md).
+  (ver diagnóstico completo em rascunhos/diagnostico_streamlit_vs_html_TI_20260707.md,
+  com adendo de 08/07).
+- **08/07: diagnóstico RECONFIRMADO** com parquets que a TI reprocessou por
+  conta própria (sem esperar a reunião combinada — 2ª vez que agem por
+  excesso de proatividade antes do combinado). SP recalculado com os dados
+  novos bate com o valor apontado em 07/07 (R$ 278,7 bi). Achado central: os
+  JSONs que o site lê no ADLS (checados direto via SAS, que segue exposto)
+  têm `gerado_em: 2026-07-06` e `schema_version: 1` — a camada web NÃO foi
+  regenerada; o reprocessamento da TI corrigiu a causa errada (parquets, que
+  já estavam certos), não a real (script de geração dos JSONs). TI concordou
+  por e-mail em adotar exportar_web.py, sem reprocessar os parquets de novo.
+- **Achado novo (08/07) — gap de frontend municipal**: o gastometro.js ao
+  vivo tem `renderEstadoCompositionCard` (por isso a aba estadual já abre as
+  6 contas, só com números errados) mas NÃO tem função equivalente para
+  município — nenhuma referência a `municipios_composicao_gastos.json` no
+  JS. Rodar exportar_web.py e publicar o arquivo não basta: falta alguém
+  alterar o JS para buscar/renderizar. Perguntar quem mantém esse arquivo
+  hoje (TI ou já é escopo do Marketing) antes de fechar o diagnóstico.
 
 ## Pendências conhecidas (ver afazeres.txt para a lista viva)
 
-- Reunião com a TI: SAS, adoção do exportar_web.py, consórcios/degenerados na
-  extração municipal, municípios semestrais, cronograma de re-deploy.
+- Reunião com a TI em 13/07/2026: cobrar execução do exportar_web.py (TI já
+  concordou, falta rodar), revogação efetiva do SAS (não só um token novo),
+  gap de frontend municipal, consórcios/degenerados na extração municipal,
+  municípios semestrais.
+- Acompanhar se a TI de fato republica data/web/ antes da reunião (checar
+  gerado_em/schema_version dos JSONs ao vivo).
 - Atualizar notas_metodologicas.docx (base unificada 02/07 + termômetro YTD
   07/07) — após a reunião com a TI.
 - Atualizar RTN local p/ maio/2026 e regenerar contador + data/web.
