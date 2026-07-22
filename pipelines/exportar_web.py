@@ -195,11 +195,22 @@ def _acumulado_real(df: pd.DataFrame) -> dict:
     }
 
 
-def _linha_ente(row: pd.Series, digitos: int) -> dict:
-    """Uma linha de mapa/ranking a partir do scatter de theme.py."""
-    return {
-        "cod_ibge": int(row["cod_ibge"]),
-        "cod_ibge_str": str(int(row["cod_ibge"])).zfill(digitos),
+def _linha_ente(row: pd.Series, digitos: int,
+                 blocos_por_cod: dict | None = None) -> dict:
+    """Uma linha de mapa/ranking a partir do scatter de theme.py.
+
+    Até aqui esta linha só carregava totais estáticos (total_milhoes etc.) —
+    por isso o contador do site ficava PARADO quando alguém selecionava um
+    estado/município individual (só o bloco "_consolidado" ia para a camada
+    web com acc_base_rs/taxa_por_segundo_rs/start_ms, o trio que o front-end
+    anima com setInterval). Quando `blocos_por_cod` é passado, anexamos o
+    mesmo bloco (via _bloco_web) TAMBÉM por ente, para o site poder animar a
+    seleção individual do mesmo jeito que já anima o Consolidado.
+    """
+    cod = int(row["cod_ibge"])
+    linha = {
+        "cod_ibge": cod,
+        "cod_ibge_str": str(cod).zfill(digitos),
         "uf": row["uf"],
         "ente": row["ente"],
         "invest_ratio": round(float(row["invest_ratio"]), 2),
@@ -209,6 +220,9 @@ def _linha_ente(row: pd.Series, digitos: int) -> dict:
         "ano": int(row["ano"]),
         "periodo": int(row["periodo"]),
     }
+    if blocos_por_cod and cod in blocos_por_cod:
+        linha["contador"] = _bloco_web(blocos_por_cod[cod])
+    return linha
 
 
 def _sanear_ratios(scatter: pd.DataFrame, contexto: str) -> pd.DataFrame:
@@ -357,7 +371,7 @@ def exportar_estados(out: Path, df_est: pd.DataFrame, cont: dict) -> tuple | Non
         "referencia": referencia,
     })
 
-    dados = [_linha_ente(r, 2) for _, r in scatter.iterrows()]
+    dados = [_linha_ente(r, 2, blocos_por_cod) for _, r in scatter.iterrows()]
     _salvar(out, "estados_mapa.json", {
         "schema_version": SCHEMA_VERSION,
         "gerado_em": _gerado_em(),
@@ -487,7 +501,7 @@ def exportar_municipios(out: Path, df_mun: pd.DataFrame, cont: dict) -> tuple | 
     })
 
     # Ranking nacional + um arquivo de mapa por UF (o site carrega sob demanda)
-    dados = [_linha_ente(r, 7) for _, r in scatter.iterrows()]
+    dados = [_linha_ente(r, 7, blocos_por_cod) for _, r in scatter.iterrows()]
     por_total = sorted(dados, key=lambda x: x["total_milhoes"], reverse=True)
     por_ratio = sorted(dados, key=lambda x: x["invest_ratio"], reverse=True)
     _salvar(out, "municipios_ranking.json", {
